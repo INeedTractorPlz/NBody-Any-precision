@@ -1,7 +1,6 @@
 #include <gmpxx.h>
 #include<gmp.h>
 #include<mpfr.h>
-#include <variant>
 
 #include <boost/numeric/odeint.hpp>
 #include <boost/numeric/ublas/matrix.hpp>
@@ -20,15 +19,13 @@
 
 
 using namespace boost::numeric::ublas;
-using namespace boost::numeric::odeint;
-
-#define NumberOfIntegrators 3
+//using namespace boost::numeric::odeint;
 
 
 typedef mpf_class data_type;
 typedef matrix<data_type> state_type;
-typedef runge_kutta_cash_karp54< state_type > error_stepper_type;
-typedef controlled_runge_kutta< error_stepper_type > controlled_stepper_type;
+//typedef runge_kutta_cash_karp54< state_type > error_stepper_type;
+//typedef controlled_runge_kutta< error_stepper_type > controlled_stepper_type;
 typedef std::pair<state_type,state_type> symplectic_type;
 
 template<typename type, typename Type>
@@ -39,8 +36,6 @@ template<typename type, typename Type>
 struct LeapFrog;
 
 
-typedef std::variant<RungeKutta4<data_type, state_type> , RungeKutta5_Fehlberg<data_type, state_type>,
-    LeapFrog<data_type, symplectic_type> > choosen_integrator_t;
 mpf_class atan(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
     mpfr_t out_t;
     mpf_class out;
@@ -63,19 +58,17 @@ struct NBody{
     std::vector< data_type >& m_times, &energy_result;
     const std::vector<data_type>& m;
     std::vector<state_type >& norm_R;
-    data_type G;
+    data_type &G;
     const data_type precision_energy;
     unsigned &current;
     unsigned p,dim;
     NBody(std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, const data_type &precision_energy,
     const std::vector<data_type>& m,unsigned &current,const unsigned &dim,
-    std::vector<state_type >& norm_R):  m_states(m_states), m_times(m_times),
+    std::vector<state_type >& norm_R, data_type &G):  m_states(m_states), m_times(m_times),
     m(m), energy_result(energy_result), precision_energy(precision_energy), 
-    current(current), dim(dim), norm_R(norm_R),p(m.size()){
-        data_type pi=atan(data_type(1.))*4;
-        G=4*pi*pi;
-    }
+    current(current), dim(dim), norm_R(norm_R),p(m.size()), G(G){    }
+
     void operator()(const state_type& R, state_type& A,  data_type t){
         A=zero_matrix<data_type>(p,dim);
         subrange(A,0,p,0,dim/2)=subrange(R,0,p,dim/2,dim);
@@ -119,8 +112,8 @@ struct SymplecticNBody : NBody{
     SymplecticNBody(std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, const data_type &precision_energy,
     const std::vector<data_type>& m,unsigned &current,const unsigned &dim,
-    std::vector<state_type >& norm_R):  NBody(m_states, m_times, energy_result, precision_energy,
-    m, current, dim, norm_R){  }
+    std::vector<state_type >& norm_R, data_type &G):  NBody(m_states, m_times, 
+    energy_result, precision_energy,m, current, dim, norm_R, G){  }
     
     void operator()(const state_type& R, state_type& A,  data_type t){
         A=zero_matrix<data_type>(p,dim/2);
@@ -182,20 +175,20 @@ data_type NBody::EnergyIntegral(const state_type& R, const state_type& norm_r){
 template<typename type>
 struct Arguments_t{
     unsigned &bits, &number_bodies, &number_steps, &dim;
-    type &time_end, &precision_energy, &distance_encounter;
+    type &time_end, &precision_energy, &distance_encounter, &G;
     std::string &name_integrator;
     bool &without_controlled_step;
     Arguments_t(unsigned &number_bodies,type &time_end,unsigned &number_steps,unsigned &bits,
     type &precision_energy, std::string &name_integrator, unsigned &dim,
-    type &distance_encounter, bool &without_controlled_step) : 
+    type &distance_encounter, bool &without_controlled_step, type &G) : 
     bits(bits), number_bodies(number_bodies),time_end(time_end),
     number_steps(number_steps),precision_energy(precision_energy),
     name_integrator(name_integrator), dim(dim), distance_encounter(distance_encounter),
-    without_controlled_step(without_controlled_step){ }
+    without_controlled_step(without_controlled_step), G(G){ }
     void Parser(int argc, char *const argv[]){
         int i, longIndex=0;
         std::string ss;
-        static const char* shortopts = "b:M:t:N:p:";
+        static const char* shortopts = "b:M:t:N:p:d:e:G:";
         static const struct option longOpts[] ={
             {"integrator",required_argument, NULL,0},
             {"without_controlled_step",no_argument, NULL, 0}  
@@ -220,6 +213,20 @@ struct Arguments_t{
                         exit(-1);
                     }else
                         number_bodies = i;
+                    break;
+                case 'G':
+                    if(typeid(type) == typeid(mpf_class))
+                        G = mpf_class_set_str(optarg,bits);
+                    else
+                        try{
+                            std::string ss=boost::lexical_cast<std::string>(optarg);
+                            G = boost::lexical_cast<type>(ss);
+                        }
+                        catch(...){
+                            std::cout << "String can't be converted to this type(" << 
+                            typeid(type).name() << ")" << std::endl;
+                            exit(-1);
+                        }
                     break;
                 case 't':
                     if(typeid(type) == typeid(mpf_class))
@@ -271,7 +278,7 @@ struct Arguments_t{
                     break;
                 case 'e':
                     if(typeid(type) == typeid(mpf_class))
-                        precision_energy = mpf_class_set_str(optarg,bits);
+                        distance_encounter = mpf_class_set_str(optarg,bits);
                     else
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
@@ -379,12 +386,17 @@ struct LeapFrog{
 template<typename Type, typename type>
 struct Encounter{
     type distance_encounter;
+    type min_distance=1.0;
     Encounter(const type& in) : distance_encounter(in){}
     bool operator()(const Type& X, const type& t){
         if(norm_2(subrange(row(X,0) - row(X,1),0,3)) <= distance_encounter){
             std::cout << "ENCOUNTER!! in time " << t << std::endl;
             return 0;
         }else{
+            std::cout << "min_distance = " << min_distance << std::endl;
+            std::cout << "current_distance= " << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
+            if(min_distance > norm_2(subrange(row(X,0) - row(X,1),0,3)))
+                min_distance = norm_2(subrange(row(X,0) - row(X,1),0,3));
             std::cout << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
             return 1;
         }
@@ -394,13 +406,17 @@ struct Encounter{
 template<typename Type, typename type>
 struct SymplecticEncounter{
     type distance_encounter;
+    type min_distance=1.0;
     SymplecticEncounter(const type& in) : distance_encounter(in){}
     bool operator()(const Type& X, const type& t){
         if(norm_2(row(X.first,0) - row(X.first,1)) <= distance_encounter){
             std::cout << "ENCOUNTER!! in time " << t << std::endl;
             return 0;
         }else{
-            std::cout << norm_2(row(X.first,0) - row(X.first,1)) << "   " << t << std::endl;
+            std::cout << "min_distance = " << min_distance << std::endl;
+            std::cout << "current_distance= " << norm_2(row(X.first,0) - row(X.first,1)) << "   " << t << std::endl;
+            if(min_distance > norm_2(row(X.first,0) - row(X.first,1)))
+                min_distance = norm_2(row(X.first,0) - row(X.first,1));
             return 1;
         }
     } 
@@ -425,18 +441,18 @@ void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observ
         while(Err(X0,Y)){
             h=h/2.;
             rk.do_step(sysF, X0,Y,t,h);
-            std::cout << "h= " << h << std::endl;
+            //std::cout << "h= " << h << std::endl;
             //std::cout << "Y :" << std::endl << Y << std::endl;
             state=1;
         }
         if(state==1){
-            std::cout << "STOP1" << std::endl;
+            //std::cout << "STOP1" << std::endl;
             h=h*2;
             rk.do_step(sysF,X0,Y,t,h);
             goto obs_point;
         }
         while(!Err(X0,Y)){
-            std::cout << "STOP" << std::endl;
+            //std::cout << "STOP" << std::endl;
             h=h*2;
             rk.do_step(sysF, X0,Y,t,h);
             state=0;
@@ -451,85 +467,71 @@ void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observ
         Obs(X0,t);
     }
 }
-/*template<int N, int... Rest>
-struct SetOfIndex_t{
-    static constexpr auto& value = SetOfIndex_t<N - 1, N, Rest...>::value;
-};
-template<int... Rest>
-struct SetOfIndex_t<0, Rest...>{
-    static constexpr int value[] = {0, Rest...};
-};
-*/
-template<typename data_type>
+
+template<typename type>
 struct Integrate_based_args_t{
-    Arguments_t<data_type> args;
+    Arguments_t<type> args;
     std::string integrator_type;
-    choosen_integrator_t choosen_integrator;
-    Integrate_based_args_t(const Arguments_t<data_type> &args) : args(args) { }
-    std::string choise_integrator(){
+    Integrate_based_args_t(const Arguments_t<type> &args) : args(args) { }
+    std::string choice_integrator(){
         if (args.name_integrator == "RK4"){
-            choosen_integrator = RungeKutta4<data_type, state_type>();
             integrator_type = "standart";
             return integrator_type;
         }
         if (args.name_integrator == "RK5"){
-            choosen_integrator = RungeKutta5_Fehlberg<data_type, state_type>();
             integrator_type = "standart";
             return integrator_type;
         }
         if (args.name_integrator == "LP"){
-            choosen_integrator = LeapFrog<data_type, symplectic_type>();
             integrator_type = "symplectic";
             return integrator_type;
         }
         throw;
     } 
-    template<typename type, typename Integrator, typename sysf, typename observer,typename Type, 
+    template<typename Integrator, typename sysf, typename observer,typename Type, 
     typename controller=std::function<int(const Type& X, const Type& Y)>, 
     typename exit=std::function<bool(const Type&X, const type &t)> >
     void integrator_call(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
         if(args.distance_encounter == 0){
+            std::cout << "distance_encounter" << args.distance_encounter << std::endl;
             if(args.without_controlled_step)
-                integrate(rk, sysF, X0, t, h, n, Obs);
+                integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},
+                [](const Type& X, const Type& Y){return -1;});
             else
                 integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},Err);
         }else{
+            std::cout << "distance_encounter" <<  args.distance_encounter << std::endl;
             if(args.without_controlled_step)
-                integrate(rk, sysF, X0, t, h, n, Obs,Bad);
+                integrate(rk, sysF, X0, t, h, n, Obs,Bad,[](const Type& X, const Type& Y){return -1;});
             else
-                integrate(rk, sysF, X0, t, h, n, Obs,Bad, Obs);
+                integrate(rk, sysF, X0, t, h, n, Obs,Bad, Err);
         }
     }
-    template<typename type, typename sysf, typename observer,typename Type, 
+    template<typename sysf, typename observer,typename Type, 
     typename controller=std::function<int(const Type& X, const Type& Y)>, 
     typename exit=std::function<bool(const Type&X, const type &t)>>
-    void integrator_call_call(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+    void integrator_call_standart(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
-                    //static constexpr auto& SetOfIndex = SetOfIndex_t<NumberOfIntegrators>::value;
-                    if(auto rk = std::get_if<0>(&choosen_integrator))
-                        integrator_call(std::get<0>(choosen_integrator),sysF,X0,t,h,n,Obs,Bad,Err);
-                    else{
-                            if(auto rk = std::get_if<1>(&choosen_integrator))
-                                integrator_call(std::get<1>(choosen_integrator),sysF,X0,t,h,n,Obs,Bad,Err);
-                        else{
-                            if(auto rk = std::get_if<2>(&choosen_integrator)){}
-                                //integrator_call(std::get<2>(choosen_integrator),sysF,X0,t,h,n,Obs,Bad,Err);
-                            else
-                                std::cout << "INTEGRATOR CALL ERROR";
-                            }
-                    }
-                    /*try{
-                        integrator_call(std::get<0>(choosen_integrator),sysF,X0,t,h,n,Obs,Bad,Err);
-                    }catch(...){
-                        try{
-                            integrator_call(std::get<1>(choosen_integrator),sysF,X0,t,h,n,Obs,Bad,Err);
-                        }catch(...){
-                            //integrator_call(std::get<2>(choosen_integrator),sysF,X0,t,h,n,Obs,Bad,Err);
-                        }
-                    }*/   
+
+        if (args.name_integrator == "RK4"){
+            integrator_call(RungeKutta5_Fehlberg<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
+        }
+        if (args.name_integrator == "RK5"){
+            integrator_call(RungeKutta4<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
+        }
+    }
+    template<typename sysf, typename observer,typename Type, 
+    typename controller=std::function<int(const Type& X, const Type& Y)>, 
+    typename exit=std::function<bool(const Type&X, const type &t)>>
+    void integrator_call_symplectic(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+                exit Bad = [](const Type& X, const type& t){return 1;},
+                controller Err = [](const Type& X, const Type& Y){return -1;}){
+        if (args.name_integrator == "LP"){
+            integrator_call(LeapFrog<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
+        }
     }
 };
 
@@ -545,6 +547,9 @@ int main(int argc, char *const argv[]){
     std::vector<state_type >norm_R;
     unsigned current=0;
     unsigned N,M, bits = 64, dim = 6;
+    data_type pi=atan(data_type(1.))*4;
+    data_type G=4*pi*pi;
+    //G=1.0;
     data_type T,t0(0.), max_delta=0, delta, distance_encounter = 0, precision_energy = 0;
     state_type X0,Y;
     symplectic_type Z;
@@ -558,9 +563,9 @@ int main(int argc, char *const argv[]){
     file_size.open("file_size.dat",std::ios_base::in);
     file_size >> T >> N >> M >> dim >> bits >> distance_encounter;
     file_size.close();
-
-    Arguments_t<data_type> keys(N,T,M,bits,precision_energy,name_integrator,dim,
-    distance_encounter,without_controlled_step);
+    std::cout << distance_encounter << std::endl;
+    Arguments_t<data_type> keys(M,T,N,bits,precision_energy,name_integrator,dim,
+    distance_encounter,without_controlled_step,G);
     keys.Parser(argc,argv);
 
     std::cout.precision(bits);
@@ -593,36 +598,38 @@ int main(int argc, char *const argv[]){
     std::cout << name_integrator << std::endl;
     Integrate_based_args_t Integrate_based_args(keys);
     try{
-        type_integrator = Integrate_based_args.choise_integrator();
+        type_integrator = Integrate_based_args.choice_integrator();
     }
     catch(...){
         std::cout << "This integrator isn't exists" << std::endl;
         exit(-1);
     }
-    NBody nb(state_result, time_result, energy_result, precision_energy, m,current,dim,norm_R);
-    SymplecticNBody snb(state_result, time_result, energy_result,  precision_energy, m,current,dim,norm_R);
-        
+
+    NBody nb(state_result, time_result, energy_result, precision_energy, m,current,dim,norm_R,G);
+    SymplecticNBody snb(state_result, time_result, energy_result,  precision_energy, m,current,
+    dim,norm_R,G);
+    std::cout << type_integrator << std::endl;
     if(type_integrator == "standart"){
-        Integrate_based_args.integrator_call_call(nb , Y , t0, data_type(T/N), N, nb,
+        Integrate_based_args.integrator_call_standart(nb , Y , t0, data_type(T/N), N, nb,
                 Encounter<state_type, data_type>(distance_encounter), nb);
+        std::cout << "steps=" << current << std::endl;
+        std::cout << Y << std::endl;
     }
-    /*if(type_integrator == "symplectic"){
+    if(type_integrator == "symplectic"){
         Z.first=subrange(Y,0,M,0,dim/2);
         Z.second=subrange(Y,0,M,dim/2,dim);
-        Integrate_based_args.integrator_call_call(snb , Z , t0, data_type(T/N), N, snb,
+        Integrate_based_args.integrator_call_symplectic(snb , Z , t0, data_type(T/N), N, snb,
                 SymplecticEncounter<symplectic_type, data_type>(distance_encounter), snb);
-    }*/
-    auto index_integrator = Integrate_based_args.choosen_integrator.index();
-    std::cout << index_integrator << std::endl;
-    std::cout << typeid(Integrate_based_args.choosen_integrator).name() << std::endl;
+        std::cout << "steps=" << current << std::endl;
+        std::cout << Z.first << std::endl;
+        std::cout << Z.second << std::endl;
+    }
     
     //size_t steps=integrate_n_steps( rk , nb , Y , 0., T/N, N, nb);
     //size_t steps=integrate_adaptive( make_controlled< error_stepper_type >( 1.0e-12 , 1.0e-8 ),
     //nb, Y, 0., T, T/N, nb);
-    //std::cout << "steps=" << steps << std::endl;
-    //std::cout << Y << std::endl;
-
-    /*
+    
+    
     out.open("res.dat",std::ios_base::trunc);
     for(unsigned i=0;i<=current;++i){
         for(unsigned j=0;j<M;++j){
@@ -633,6 +640,7 @@ int main(int argc, char *const argv[]){
         out << std::endl << std::endl;
     }
     out.close();
+    /*
       for(unsigned j=0;j<M;++j){
         out.open(filenamestr("NBodyRK_",j,".dat"),std::ios_base::trunc);
         std::cout << filenamestr("NBodyRK_",j,".dat") << std::endl;
