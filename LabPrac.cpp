@@ -35,6 +35,12 @@ struct RungeKutta5_Fehlberg;
 template<typename type, typename Type>
 struct LeapFrog;
 
+template<typename type>
+std::ostream& operator<<(std::ostream& os, const std::pair<type,type> in){
+    os << in.first << std::endl;
+    os << in.second << std::endl;
+    return os;
+} 
 
 mpf_class atan(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
     mpfr_t out_t;
@@ -99,7 +105,7 @@ struct NBody{
         state_type norm_Y=std::move(state_type(p,p));
         norm(Y,norm_Y);
         data_type energy_Y(EnergyIntegral(Y,norm_Y));
-        data_type delta=abs((energy_result[0]-energy_Y)/energy_result[0]);
+        data_type delta=abs((energy_result[current]-energy_Y)/energy_result[current]);
         //std::cout << "delta= " << delta << std::endl;
         if(delta > precision_energy) return 1;
         else return 0;
@@ -149,10 +155,13 @@ struct SymplecticNBody : NBody{
         state_type Y_matrix(p,dim);
         subrange(Y_matrix,0,p,0,dim/2)=Y.first;
         subrange(Y_matrix,0,p,dim/2,dim)=Y.second;
-    
+        
         norm(Y_matrix,norm_Y);
         data_type energy_Y(EnergyIntegral(Y_matrix,norm_Y));
-        data_type delta=abs((energy_result[0]-energy_Y)/energy_result[0]);
+        data_type delta=abs((energy_result[current]-energy_Y)/energy_result[current]);
+        //std::cout << "abs(energy_result[0]-energy_Y)= " << abs(energy_result[0]-energy_Y) << std::endl;
+        //std::cout << "energy_result[0]= " << energy_result[0] << std::endl;
+        //std::cout << "energy_Y= " << energy_Y << std::endl;
         //std::cout << "delta= " << delta << std::endl;
         if(delta > precision_energy) return 1;
         else return 0;
@@ -430,10 +439,12 @@ void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observ
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
     int state;
     Type Y;
+    type h_begin=h;
     type T=t+h*n;
     Obs(X0,t);
     while(t<T && Bad(X0,t)){
         state=-1;
+        std::cout << t << '\r';
         rk.do_step(sysF,X0,Y,t,h);
         if(Err(X0,Y)==-1){
             goto obs_point;
@@ -441,24 +452,31 @@ void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observ
         while(Err(X0,Y)){
             h=h/2.;
             rk.do_step(sysF, X0,Y,t,h);
-            //std::cout << "h= " << h << std::endl;
+            //std::cout << "h_decrease= " << h << std::endl;
             //std::cout << "Y :" << std::endl << Y << std::endl;
             state=1;
         }
         if(state==1){
             //std::cout << "STOP1" << std::endl;
             h=h*2;
+            //std::cout << "h_increase= " << h << std::endl;
             rk.do_step(sysF,X0,Y,t,h);
             goto obs_point;
         }
         while(!Err(X0,Y)){
+            if(h > h_begin){
+                state=0;
+                break;
+            }
             //std::cout << "STOP" << std::endl;
             h=h*2;
+            //std::cout << "h_increase= " << h << std::endl;
             rk.do_step(sysF, X0,Y,t,h);
             state=0;
         }
         if(state==0){
             h=h/2;
+            //std::cout << "h_decrease= " << h << std::endl; 
             rk.do_step(sysF,X0,Y,t,h);
         }
         obs_point:
@@ -466,6 +484,7 @@ void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observ
         t+=h;
         Obs(X0,t);
     }
+    std::cout << std::endl;
 }
 
 template<typename type>
@@ -475,11 +494,11 @@ struct Integrate_based_args_t{
     Integrate_based_args_t(const Arguments_t<type> &args) : args(args) { }
     std::string choice_integrator(){
         if (args.name_integrator == "RK4"){
-            integrator_type = "standart";
+            integrator_type = "standard";
             return integrator_type;
         }
         if (args.name_integrator == "RK5"){
-            integrator_type = "standart";
+            integrator_type = "standard";
             return integrator_type;
         }
         if (args.name_integrator == "LP"){
@@ -495,14 +514,14 @@ struct Integrate_based_args_t{
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
         if(args.distance_encounter == 0){
-            std::cout << "distance_encounter" << args.distance_encounter << std::endl;
+            std::cout << "distance_encounter =" << args.distance_encounter << std::endl;
             if(args.without_controlled_step)
                 integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},
                 [](const Type& X, const Type& Y){return -1;});
             else
                 integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},Err);
         }else{
-            std::cout << "distance_encounter" <<  args.distance_encounter << std::endl;
+            std::cout << "distance_encounter =" <<  args.distance_encounter << std::endl;
             if(args.without_controlled_step)
                 integrate(rk, sysF, X0, t, h, n, Obs,Bad,[](const Type& X, const Type& Y){return -1;});
             else
@@ -512,7 +531,7 @@ struct Integrate_based_args_t{
     template<typename sysf, typename observer,typename Type, 
     typename controller=std::function<int(const Type& X, const Type& Y)>, 
     typename exit=std::function<bool(const Type&X, const type &t)>>
-    void integrator_call_standart(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+    void integrator_call_standard(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
 
@@ -554,7 +573,7 @@ int main(int argc, char *const argv[]){
     state_type X0,Y;
     symplectic_type Z;
     std::string name_integrator = "RK4";
-    std::string type_integrator = "standart";
+    std::string type_integrator = "standard";
     bool without_controlled_step = 0;
     //runge_kutta4<state_type> rk;
     //controlled_stepper_type controlled_stepper;
@@ -609,8 +628,8 @@ int main(int argc, char *const argv[]){
     SymplecticNBody snb(state_result, time_result, energy_result,  precision_energy, m,current,
     dim,norm_R,G);
     std::cout << type_integrator << std::endl;
-    if(type_integrator == "standart"){
-        Integrate_based_args.integrator_call_standart(nb , Y , t0, data_type(T/N), N, nb,
+    if(type_integrator == "standard"){
+        Integrate_based_args.integrator_call_standard(nb , Y , t0, data_type(T/N), N, nb,
                 Encounter<state_type, data_type>(distance_encounter), nb);
         std::cout << "steps=" << current << std::endl;
         std::cout << Y << std::endl;
@@ -650,7 +669,7 @@ int main(int argc, char *const argv[]){
         }        
         out.close();
     }
-    
+    */
     energy.open("NBodyRK_energy.dat",std::ios_base::trunc);
     for(unsigned i=0;i<=current;++i){
         energy <<  "h(" << i << ")= " << energy_result[i] << std::endl;
@@ -658,6 +677,6 @@ int main(int argc, char *const argv[]){
         if(delta > max_delta) max_delta=delta;
     }
     std::cout << max_delta << std::endl;
-    */
+    
    return 0;
 }
