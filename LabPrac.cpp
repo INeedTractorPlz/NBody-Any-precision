@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <getopt.h>
 
+#include <algorithm>
 #include<ios>
 #include<fstream>
 #include <functional>
@@ -17,13 +18,30 @@
 #include<string>
 #include<iostream>
 
+#define ANY_PRESICION
+
+#ifdef ANY_PRESICION
+#define ABS_ abs
+typedef mpf_class data_type;
+#endif
+
+#ifdef DOUBLE_PRESICION
+#define ABS_ fabs
+typedef double data_type;
+#endif
+
+
+#ifdef FLOAT_PRESICION
+#define ABS_ fabs
+typedef float data_type;
+#endif
 
 using namespace boost::numeric::ublas;
 //using namespace boost::numeric::odeint;
 
 
-typedef mpf_class data_type;
 typedef matrix<data_type> state_type;
+typedef vector<data_type> state_vector;
 //typedef runge_kutta_cash_karp54< state_type > error_stepper_type;
 //typedef controlled_runge_kutta< error_stepper_type > controlled_stepper_type;
 typedef std::pair<state_type,state_type> symplectic_type;
@@ -50,6 +68,36 @@ mpf_class atan(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
     mpfr_get_f(out.get_mpf_t(),out_t,rnd);
     return out;
 }
+
+mpf_class acos(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
+    mpfr_t out_t;
+    mpf_class out;
+    mpfr_init_set_f(out_t,in.get_mpf_t(),rnd);
+    mpfr_acos(out_t,out_t,rnd);
+    mpfr_get_f(out.get_mpf_t(),out_t,rnd);
+    return out;
+}
+
+mpf_class cos(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
+    mpfr_t out_t;
+    mpf_class out;
+    mpfr_init_set_f(out_t,in.get_mpf_t(),rnd);
+    mpfr_cos(out_t,out_t,rnd);
+    mpfr_get_f(out.get_mpf_t(),out_t,rnd);
+    return out;
+}
+
+mpf_class atan2(mpf_class cos_x, mpf_class sin_x, mpfr_rnd_t rnd=MPFR_RNDN){
+    mpfr_t cos_t,sin_t, out_t;
+    mpf_class out;
+    mpfr_init_set_f(cos_t,cos_x.get_mpf_t(),rnd);
+    mpfr_init_set_f(sin_t,sin_x.get_mpf_t(),rnd);
+    mpfr_init2(out_t,cos_x.get_prec());
+    mpfr_atan2(out_t,sin_t,cos_t,rnd);
+    mpfr_get_f(out.get_mpf_t(),out_t,rnd);
+    return out;
+}
+
 mpf_class mpf_class_set_str(const char *s, mpfr_prec_t prec = 64, mpfr_rnd_t rnd=MPFR_RNDN){
     mpfr_t out_t;
     mpfr_init2(out_t, prec);
@@ -62,76 +110,86 @@ mpf_class mpf_class_set_str(const char *s, mpfr_prec_t prec = 64, mpfr_rnd_t rnd
 struct NBody{
     std::vector< state_type >& m_states;
     std::vector< data_type >& m_times, &energy_result;
+    std::vector<state_vector> &orbital_elements_moon; 
     const std::vector<data_type>& m;
     std::vector<state_type >& norm_R;
     data_type &G;
     const data_type precision_energy;
     unsigned &current;
-    unsigned p,dim;
+    unsigned number_bodies,dim;
     NBody(std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, const data_type &precision_energy,
     const std::vector<data_type>& m,unsigned &current,const unsigned &dim,
-    std::vector<state_type >& norm_R, data_type &G):  m_states(m_states), m_times(m_times),
-    m(m), energy_result(energy_result), precision_energy(precision_energy), 
-    current(current), dim(dim), norm_R(norm_R),p(m.size()), G(G){    }
+    std::vector<state_type >& norm_R, data_type &G,std::vector<state_vector> &orbital_elements_moon):
+    m_states(m_states), m_times(m_times),m(m), energy_result(energy_result),
+    precision_energy(precision_energy), current(current), dim(dim), norm_R(norm_R),
+    number_bodies(m.size()), G(G),orbital_elements_moon(orbital_elements_moon){    }
 
     void operator()(const state_type& R, state_type& A,  data_type t){
-        A=zero_matrix<data_type>(p,dim);
-        subrange(A,0,p,0,dim/2)=subrange(R,0,p,dim/2,dim);
-        state_type norm_r(p,p);
+        A=zero_matrix<data_type>(number_bodies,dim);
+        subrange(A,0,number_bodies,0,dim/2)=subrange(R,0,number_bodies,dim/2,dim);
+        state_type norm_r(number_bodies,number_bodies);
 
         norm(R,norm_r);        
-        for(unsigned j=0;j<p;++j){
+        for(unsigned j=0;j<number_bodies;++j){
             for(unsigned k=0;k<j;++k){
                 subrange(A,j,j+1,dim/2,dim)+=m[k]*(subrange(R,k,k+1,0,dim/2)-subrange(R,j,j+1,0,dim/2))/
                 (norm_r(k,j)*norm_r(k,j)*norm_r(k,j));
             }
-            for(unsigned k=j+1;k<p;++k){
+            for(unsigned k=j+1;k<number_bodies;++k){
                 subrange(A,j,j+1,dim/2,dim)+=m[k]*(subrange(R,k,k+1,0,dim/2)-subrange(R,j,j+1,0,dim/2))/
                 (norm_r(k,j)*norm_r(k,j)*norm_r(k,j));
             }
         }
-        subrange(A,0,p,dim/2,dim)*=G;
+        subrange(A,0,number_bodies,dim/2,dim)*=G;
     }    
     void operator()( const state_type &R , data_type t ){
         if(t!=0) ++current;
         m_states.push_back(R); 
         m_times.push_back(t);
-        norm_R.push_back(std::move(state_type(p,p))); 
+        norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
         norm(R,norm_R[current]);
         energy_result.push_back(EnergyIntegral(R,norm_R[current]));
+        state_vector distance_moon = row(R,0)-row(R,1);
+        std::for_each(distance_moon.begin(),distance_moon.end(),[](data_type &x){x=ABS_(x);});
+        orbital_elements_moon.push_back(std::move(state_vector(4)));
+        get_orbital_elements(distance_moon,0,1,orbital_elements_moon[current]);
     }
+
     bool operator()(const state_type& X, const state_type& Y){
-        state_type norm_Y=std::move(state_type(p,p));
+        state_type norm_Y=std::move(state_type(number_bodies,number_bodies));
         norm(Y,norm_Y);
         data_type energy_Y(EnergyIntegral(Y,norm_Y));
-        data_type delta=abs((energy_result[current]-energy_Y)/energy_result[current]);
+        data_type delta=ABS_((energy_result[current]-energy_Y)/energy_result[current]);
         //std::cout << "delta= " << delta << std::endl;
         if(delta > precision_energy) return 1;
         else return 0;
     }
     void norm(const state_type& R, state_type& norm_r);
     data_type EnergyIntegral(const state_type& R, const state_type& norm_r);
+    void get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
+    state_vector& orbital_elements);
 };
 
 struct SymplecticNBody : NBody{
     SymplecticNBody(std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, const data_type &precision_energy,
     const std::vector<data_type>& m,unsigned &current,const unsigned &dim,
-    std::vector<state_type >& norm_R, data_type &G):  NBody(m_states, m_times, 
-    energy_result, precision_energy,m, current, dim, norm_R, G){  }
+    std::vector<state_type >& norm_R, data_type &G,std::vector<state_vector> &orbital_elements_moon):
+    NBody(m_states, m_times, energy_result, precision_energy,m,
+    current, dim, norm_R, G,orbital_elements_moon){  }
     
     void operator()(const state_type& R, state_type& A,  data_type t){
-        A=zero_matrix<data_type>(p,dim/2);
-        state_type norm_r(p,p);
+        A=zero_matrix<data_type>(number_bodies,dim/2);
+        state_type norm_r(number_bodies,number_bodies);
 
         norm(R,norm_r);
-        for(unsigned j=0;j<p;++j){
+        for(unsigned j=0;j<number_bodies;++j){
             for(unsigned k=0;k<j;++k){
                 row(A,j)+=m[k]*(row(R,k)-row(R,j))/
                 (norm_r(k,j)*norm_r(k,j)*norm_r(k,j));
             }
-            for(unsigned k=j+1;k<p;++k){
+            for(unsigned k=j+1;k<number_bodies;++k){
                 row(A,j)+=m[k]*(row(R,k)-row(R,j))/
                 (norm_r(k,j)*norm_r(k,j)*norm_r(k,j));
             }
@@ -140,26 +198,26 @@ struct SymplecticNBody : NBody{
     }    
     void operator()( const symplectic_type &R , data_type t ){
         if(t!=0) ++current;
-        state_type R_matrix(p,dim);
-        subrange(R_matrix,0,p,0,dim/2)=R.first;
-        subrange(R_matrix,0,p,dim/2,dim)=R.second;
+        state_type R_matrix(number_bodies,dim);
+        subrange(R_matrix,0,number_bodies,0,dim/2)=R.first;
+        subrange(R_matrix,0,number_bodies,dim/2,dim)=R.second;
         
         m_states.push_back(R_matrix); 
         m_times.push_back(t);
-        norm_R.push_back(std::move(state_type(p,p))); 
+        norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
         norm(R.first,norm_R[current]);
         energy_result.push_back(EnergyIntegral(R_matrix,norm_R[current]));
     }
     bool operator()(const symplectic_type& X, const symplectic_type& Y){
-        state_type norm_Y=std::move(state_type(p,p));
-        state_type Y_matrix(p,dim);
-        subrange(Y_matrix,0,p,0,dim/2)=Y.first;
-        subrange(Y_matrix,0,p,dim/2,dim)=Y.second;
+        state_type norm_Y=std::move(state_type(number_bodies,number_bodies));
+        state_type Y_matrix(number_bodies,dim);
+        subrange(Y_matrix,0,number_bodies,0,dim/2)=Y.first;
+        subrange(Y_matrix,0,number_bodies,dim/2,dim)=Y.second;
         
         norm(Y_matrix,norm_Y);
         data_type energy_Y(EnergyIntegral(Y_matrix,norm_Y));
-        data_type delta=abs((energy_result[current]-energy_Y)/energy_result[current]);
-        //std::cout << "abs(energy_result[0]-energy_Y)= " << abs(energy_result[0]-energy_Y) << std::endl;
+        data_type delta=ABS_((energy_result[current]-energy_Y)/energy_result[current]);
+        //std::cout << "ABS_(energy_result[0]-energy_Y)= " << ABS_(energy_result[0]-energy_Y) << std::endl;
         //std::cout << "energy_result[0]= " << energy_result[0] << std::endl;
         //std::cout << "energy_Y= " << energy_Y << std::endl;
         //std::cout << "delta= " << delta << std::endl;
@@ -168,6 +226,53 @@ struct SymplecticNBody : NBody{
     }
 };
 
+void NBody::get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
+state_vector& orbital_elements){
+    data_type kappa_quad,r,v,a,rv,cosE,cosE0,sinE0,E0,e,p_gr,pi,i0;
+    
+    kappa_quad=G*(m[i]+m[j]);
+    r=norm_R[current](i,j);
+    v=norm_2(subrange(R,dim/2,dim));
+    a=1./(ABS_(2./r-v*v/kappa_quad));
+    //std::cout << R << std::endl;
+    rv=inner_prod(subrange(R,0,dim/2),subrange(R,dim/2,dim));
+    pi=atan(data_type(1.))*4;
+
+    cosE=a-r;
+    sinE0=a*rv;
+    cosE0=sqrt(kappa_quad)*sqrt(a)*cosE;
+    E0=atan2(sinE0,cosE0)-pi/2;
+    
+    e=(1.-r/a)/cos(E0);
+    p_gr=a*(1.-e*e);
+        
+    if(dim/2 != 3)
+        i0=0.;
+    else
+        i0=acos((R(0)*R(4)-R(1)*R(3))/sqrt(kappa_quad*p_gr));
+    if(current == 0){
+        std::cout << "kappa_quad =" << kappa_quad << std::endl;
+        std::cout << "r =" << r << std::endl;
+        std::cout << "v =" << v << std::endl;
+        std::cout << "a =" << a << std::endl;
+        std::cout << "rv =" << rv << std::endl;
+        std::cout << "cosE =" << cosE << std::endl;
+        std::cout << "cosE0 =" << cosE0 << std::endl;
+        std::cout << "sinE0 =" << sinE0 << std::endl;
+        std::cout << "E0 =" << E0 << std::endl;
+        std::cout << "cos(E0) =" << cos(E0) << std::endl;
+        std::cout << "e =" << e << std::endl;
+        std::cout << "i0 =" << i0 << std::endl;
+        std::cout << "(R(0)*R(4)-R(1)*R(3)) =" << (R(0)*R(4)-R(1)*R(3)) << std::endl;
+        std::cout << "p_gr =" << p_gr << std::endl;
+        std::cout << "sqrt(kappa_quad*p_gr) =" << sqrt(kappa_quad*p_gr) << std::endl;
+    }
+    orbital_elements(0)=a;
+    orbital_elements(1)=e;
+    orbital_elements(2)=i0*180/pi;
+    orbital_elements(3)=(1-e)*a;
+}
+
 data_type NBody::EnergyIntegral(const state_type& R, const state_type& norm_r){
     data_type E=0,U;
     for(unsigned i=0;i<m.size();++i){
@@ -175,7 +280,7 @@ data_type NBody::EnergyIntegral(const state_type& R, const state_type& norm_r){
         for(unsigned j=i+1;j<m.size();++j)
             U-=m[j]*m[i]/(norm_r(i,j));
         E+=U*G;
-        E+=m[i]*inner_prod(row(subrange(R,0,p,dim/2,dim),i),row(subrange(R,0,p,dim/2,dim),i))/2;
+        E+=m[i]*inner_prod(row(subrange(R,0,number_bodies,dim/2,dim),i),row(subrange(R,0,number_bodies,dim/2,dim),i))/2;
         //E+=m[i]*(R(i,3)*R(i,3)+R(i,4)*R(i,4)+R(i,5)*R(i,5))/2;
     }    
     return E;
@@ -224,9 +329,9 @@ struct Arguments_t{
                         number_bodies = i;
                     break;
                 case 'G':
-                    if(typeid(type) == typeid(mpf_class))
-                        G = mpf_class_set_str(optarg,bits);
-                    else
+                    #ifdef ANY_PRESICION
+                        G=mpf_class_set_str(optarg,bits);
+                    #else
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
                             G = boost::lexical_cast<type>(ss);
@@ -236,11 +341,12 @@ struct Arguments_t{
                             typeid(type).name() << ")" << std::endl;
                             exit(-1);
                         }
+                    #endif
                     break;
                 case 't':
-                    if(typeid(type) == typeid(mpf_class))
+                    #ifdef ANY_PRESICION
                         time_end = mpf_class_set_str(optarg,bits);
-                    else
+                    #else
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
                             time_end = boost::lexical_cast<type>(ss);
@@ -250,6 +356,7 @@ struct Arguments_t{
                             typeid(type).name() << ")" << std::endl;
                             exit(-1);
                         }
+                    #endif
                     break;
                 case 'N':
                     ss=optarg;
@@ -262,9 +369,9 @@ struct Arguments_t{
                         number_steps = i;
                     break;
                 case 'p':
-                    if(typeid(type) == typeid(mpf_class))
+                    #ifdef ANY_PRESICION
                         precision_energy = mpf_class_set_str(optarg,bits);
-                    else
+                    #else
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
                             precision_energy = boost::lexical_cast<type>(ss);
@@ -274,6 +381,7 @@ struct Arguments_t{
                             typeid(type).name() << ")" << std::endl;
                             exit(-1);
                         }
+                    #endif
                     break;
                 case 'd':
                     ss=optarg;
@@ -286,9 +394,9 @@ struct Arguments_t{
                         dim = 2*i;
                     break;
                 case 'e':
-                    if(typeid(type) == typeid(mpf_class))
+                    #ifdef ANY_PRESICION
                         distance_encounter = mpf_class_set_str(optarg,bits);
-                    else
+                    #else
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
                             distance_encounter = boost::lexical_cast<type>(ss);
@@ -298,6 +406,7 @@ struct Arguments_t{
                             typeid(type).name() << ")" << std::endl;
                             exit(-1);
                         }
+                    #endif
                     break;
                 case 0:
                     if("integrator" == longOpts[longIndex].name){
@@ -327,7 +436,7 @@ void NBody::norm(const state_type& R, state_type& norm_r){
         for(unsigned j=0;j<i;++j)
             norm_r(i,j)=norm_r(j,i);
          for(unsigned j=i+1;j<R.size1();++j){
-            norm_r(i,j)=norm_2(row(subrange(R,0,p,0,dim/2),i)-row(subrange(R,0,p,0,dim/2),j));
+            norm_r(i,j)=norm_2(row(subrange(R,0,number_bodies,0,dim/2),i)-row(subrange(R,0,number_bodies,0,dim/2),j));
             //r1=R(i,0)-R(j,0); r2=R(i,1)-R(j,1); 
             //r3=R(i,2)-R(j,2);
             //norm_r(i,j)=sqrt(r1*r1+r2*r2+r3*r3);
@@ -402,11 +511,11 @@ struct Encounter{
             std::cout << "ENCOUNTER!! in time " << t << std::endl;
             return 0;
         }else{
-            std::cout << "min_distance = " << min_distance << std::endl;
-            std::cout << "current_distance= " << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
+            //std::cout << "min_distance = " << min_distance << std::endl;
+            //std::cout << "current_distance= " << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
             if(min_distance > norm_2(subrange(row(X,0) - row(X,1),0,3)))
                 min_distance = norm_2(subrange(row(X,0) - row(X,1),0,3));
-            std::cout << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
+            //std::cout << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
             return 1;
         }
     } 
@@ -558,12 +667,13 @@ struct Integrate_based_args_t{
 int main(int argc, char *const argv[]){
     std::ios_base::sync_with_stdio(false);
     
-    std::ofstream out,energy;
-    std::ifstream file_in,file_size,file_mass,file_initial,file_RBinitial;
+    std::ofstream out,energy,moon;
+    std::ifstream file_in,file_size,file_mass,file_initial;
     std::vector<data_type> m;
     std::vector<state_type> state_result;
     std::vector<data_type> time_result, energy_result;
     std::vector<state_type >norm_R;
+    std::vector<state_vector> orbital_elements_moon;
     unsigned current=0;
     unsigned N,M, bits = 64, dim = 6;
     data_type pi=atan(data_type(1.))*4;
@@ -624,9 +734,10 @@ int main(int argc, char *const argv[]){
         exit(-1);
     }
 
-    NBody nb(state_result, time_result, energy_result, precision_energy, m,current,dim,norm_R,G);
+    NBody nb(state_result, time_result, energy_result, precision_energy,
+    m,current,dim,norm_R,G,orbital_elements_moon);
     SymplecticNBody snb(state_result, time_result, energy_result,  precision_energy, m,current,
-    dim,norm_R,G);
+    dim,norm_R,G, orbital_elements_moon);
     std::cout << type_integrator << std::endl;
     if(type_integrator == "standard"){
         Integrate_based_args.integrator_call_standard(nb , Y , t0, data_type(T/N), N, nb,
@@ -659,6 +770,15 @@ int main(int argc, char *const argv[]){
         out << std::endl << std::endl;
     }
     out.close();
+    
+    moon.open("moon.dat",std::ios_base::trunc);
+    for(unsigned i=0;i<=current;++i){
+        for(unsigned k=0;k<4;++k)
+            moon << orbital_elements_moon[i](k) << " ";
+        moon << std::endl;
+    }
+    moon.close();
+    
     /*
       for(unsigned j=0;j<M;++j){
         out.open(filenamestr("NBodyRK_",j,".dat"),std::ios_base::trunc);
@@ -673,7 +793,7 @@ int main(int argc, char *const argv[]){
     energy.open("NBodyRK_energy.dat",std::ios_base::trunc);
     for(unsigned i=0;i<=current;++i){
         energy <<  "h(" << i << ")= " << energy_result[i] << std::endl;
-        delta=abs((energy_result[0]-energy_result[i])/energy_result[i]);
+        delta=ABS_((energy_result[0]-energy_result[i])/energy_result[i]);
         if(delta > max_delta) max_delta=delta;
     }
     std::cout << max_delta << std::endl;
