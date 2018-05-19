@@ -18,7 +18,7 @@
 #include<string>
 #include<iostream>
 
-#define ANY_PRESICION
+#define DOUBLE_PRESICION
 
 #ifdef ANY_PRESICION
 #define ABS_ abs
@@ -38,7 +38,6 @@ typedef float data_type;
 
 using namespace boost::numeric::ublas;
 //using namespace boost::numeric::odeint;
-
 
 typedef matrix<data_type> state_type;
 typedef vector<data_type> state_vector;
@@ -107,13 +106,21 @@ mpf_class mpf_class_set_str(const char *s, mpfr_prec_t prec = 64, mpfr_rnd_t rnd
     return out;
 }
 
+state_vector cross_product(const state_vector &u, const state_vector &v){
+    state_vector result(u.size());
+    result(0) = u(1)*v(2) - u(2)*v(1);
+    result(1) = u(2)*v(0) - u(0)*v(2);
+    result(2) = u(0)*v(1) - u(1)*v(0);
+    return result;
+}
+
 struct NBody{
     std::vector< state_type >& m_states;
     std::vector< data_type >& m_times, &energy_result;
     std::vector<state_vector> &orbital_elements_moon; 
     const std::vector<data_type>& m;
     std::vector<state_type >& norm_R;
-    data_type &G;
+    data_type &G,pi = atan(data_type(1.0))*4;
     const data_type precision_energy;
     unsigned &current;
     unsigned number_bodies,dim;
@@ -207,6 +214,10 @@ struct SymplecticNBody : NBody{
         norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
         norm(R.first,norm_R[current]);
         energy_result.push_back(EnergyIntegral(R_matrix,norm_R[current]));
+        state_vector distance_moon = row(R_matrix,0)-row(R_matrix,1);
+        std::for_each(distance_moon.begin(),distance_moon.end(),[](data_type &x){x=ABS_(x);});
+        orbital_elements_moon.push_back(std::move(state_vector(4)));
+        get_orbital_elements(distance_moon,0,1,orbital_elements_moon[current]);
     }
     bool operator()(const symplectic_type& X, const symplectic_type& Y){
         state_type norm_Y=std::move(state_type(number_bodies,number_bodies));
@@ -226,51 +237,28 @@ struct SymplecticNBody : NBody{
     }
 };
 
+
 void NBody::get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
 state_vector& orbital_elements){
-    data_type kappa_quad,r,v,a,rv,cosE,cosE0,sinE0,E0,e,p_gr,pi,i0;
+    data_type kappa_quad,r,v;
     
     kappa_quad=G*(m[i]+m[j]);
     r=norm_R[current](i,j);
     v=norm_2(subrange(R,dim/2,dim));
-    a=1./(ABS_(2./r-v*v/kappa_quad));
-    //std::cout << R << std::endl;
-    rv=inner_prod(subrange(R,0,dim/2),subrange(R,dim/2,dim));
-    pi=atan(data_type(1.))*4;
-
-    cosE=a-r;
-    sinE0=a*rv;
-    cosE0=sqrt(kappa_quad)*sqrt(a)*cosE;
-    E0=atan2(sinE0,cosE0)-pi/2;
     
-    e=(1.-r/a)/cos(E0);
-    p_gr=a*(1.-e*e);
-        
-    if(dim/2 != 3)
-        i0=0.;
-    else
-        i0=acos((R(0)*R(4)-R(1)*R(3))/sqrt(kappa_quad*p_gr));
-    if(current == 0){
-        std::cout << "kappa_quad =" << kappa_quad << std::endl;
-        std::cout << "r =" << r << std::endl;
-        std::cout << "v =" << v << std::endl;
-        std::cout << "a =" << a << std::endl;
-        std::cout << "rv =" << rv << std::endl;
-        std::cout << "cosE =" << cosE << std::endl;
-        std::cout << "cosE0 =" << cosE0 << std::endl;
-        std::cout << "sinE0 =" << sinE0 << std::endl;
-        std::cout << "E0 =" << E0 << std::endl;
-        std::cout << "cos(E0) =" << cos(E0) << std::endl;
-        std::cout << "e =" << e << std::endl;
-        std::cout << "i0 =" << i0 << std::endl;
-        std::cout << "(R(0)*R(4)-R(1)*R(3)) =" << (R(0)*R(4)-R(1)*R(3)) << std::endl;
-        std::cout << "p_gr =" << p_gr << std::endl;
-        std::cout << "sqrt(kappa_quad*p_gr) =" << sqrt(kappa_quad*p_gr) << std::endl;
-    }
-    orbital_elements(0)=a;
-    orbital_elements(1)=e;
-    orbital_elements(2)=i0*180/pi;
-    orbital_elements(3)=(1-e)*a;
+    data_type h = v*v/2 - kappa_quad/r;
+    state_vector c = cross_product(subrange(R,0,dim/2),subrange(R,dim/2,dim));
+    
+    data_type a,e,inclination;
+    e = sqrt(1.+2*h*norm_2(c)*norm_2(c)/(kappa_quad*kappa_quad));
+    a = -kappa_quad/2/h;
+    
+    inclination = acos(c(2)/norm_2(c));
+
+    orbital_elements(0) = a;
+    orbital_elements(1) = e;
+    orbital_elements(2) = inclination*180/pi;
+    orbital_elements(3) = (1-e)*a;
 }
 
 data_type NBody::EnergyIntegral(const state_type& R, const state_type& norm_r){
@@ -531,8 +519,8 @@ struct SymplecticEncounter{
             std::cout << "ENCOUNTER!! in time " << t << std::endl;
             return 0;
         }else{
-            std::cout << "min_distance = " << min_distance << std::endl;
-            std::cout << "current_distance= " << norm_2(row(X.first,0) - row(X.first,1)) << "   " << t << std::endl;
+            //std::cout << "min_distance = " << min_distance << std::endl;
+            //std::cout << "current_distance= " << norm_2(row(X.first,0) - row(X.first,1)) << "   " << t << std::endl;
             if(min_distance > norm_2(row(X.first,0) - row(X.first,1)))
                 min_distance = norm_2(row(X.first,0) - row(X.first,1));
             return 1;
