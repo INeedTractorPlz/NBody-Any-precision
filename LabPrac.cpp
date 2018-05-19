@@ -18,7 +18,7 @@
 #include<string>
 #include<iostream>
 
-#define DOUBLE_PRESICION
+#define ANY_PRESICION
 
 #ifdef ANY_PRESICION
 #define ABS_ abs
@@ -120,6 +120,8 @@ struct NBody{
     std::vector<state_vector> &orbital_elements_moon; 
     const std::vector<data_type>& m;
     std::vector<state_type >& norm_R;
+    std::pair<unsigned, unsigned> two_bodies;
+    bool without_orbital_elements;
     data_type &G,pi = atan(data_type(1.0))*4;
     const data_type precision_energy;
     unsigned &current;
@@ -127,10 +129,12 @@ struct NBody{
     NBody(std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, const data_type &precision_energy,
     const std::vector<data_type>& m,unsigned &current,const unsigned &dim,
-    std::vector<state_type >& norm_R, data_type &G,std::vector<state_vector> &orbital_elements_moon):
-    m_states(m_states), m_times(m_times),m(m), energy_result(energy_result),
-    precision_energy(precision_energy), current(current), dim(dim), norm_R(norm_R),
-    number_bodies(m.size()), G(G),orbital_elements_moon(orbital_elements_moon){    }
+    std::vector<state_type >& norm_R, data_type &G,std::vector<state_vector> &orbital_elements_moon,
+    bool without_orbital_elements, std::pair<unsigned, unsigned> two_bodies):m_states(m_states),
+    m_times(m_times),m(m), energy_result(energy_result),precision_energy(precision_energy),
+    current(current),dim(dim), norm_R(norm_R),number_bodies(m.size()), G(G),
+    orbital_elements_moon(orbital_elements_moon),without_orbital_elements(without_orbital_elements),
+    two_bodies(two_bodies){    }
 
     void operator()(const state_type& R, state_type& A,  data_type t){
         A=zero_matrix<data_type>(number_bodies,dim);
@@ -157,10 +161,13 @@ struct NBody{
         norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
         norm(R,norm_R[current]);
         energy_result.push_back(EnergyIntegral(R,norm_R[current]));
-        state_vector distance_moon = row(R,0)-row(R,1);
-        std::for_each(distance_moon.begin(),distance_moon.end(),[](data_type &x){x=ABS_(x);});
-        orbital_elements_moon.push_back(std::move(state_vector(4)));
-        get_orbital_elements(distance_moon,0,1,orbital_elements_moon[current]);
+        if(!without_orbital_elements){
+            state_vector distance_moon = row(R,two_bodies.first)-row(R,two_bodies.second);
+            std::for_each(distance_moon.begin(),distance_moon.end(),[](data_type &x){x=ABS_(x);});
+            orbital_elements_moon.push_back(std::move(state_vector(4)));
+            get_orbital_elements(distance_moon,two_bodies.first,two_bodies.second,
+            orbital_elements_moon[current]);
+        }
     }
 
     bool operator()(const state_type& X, const state_type& Y){
@@ -182,9 +189,10 @@ struct SymplecticNBody : NBody{
     SymplecticNBody(std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, const data_type &precision_energy,
     const std::vector<data_type>& m,unsigned &current,const unsigned &dim,
-    std::vector<state_type >& norm_R, data_type &G,std::vector<state_vector> &orbital_elements_moon):
+    std::vector<state_type >& norm_R, data_type &G,std::vector<state_vector> &orbital_elements_moon,
+    bool without_orbital_elements, std::pair<unsigned,unsigned> two_bodies):
     NBody(m_states, m_times, energy_result, precision_energy,m,
-    current, dim, norm_R, G,orbital_elements_moon){  }
+    current, dim, norm_R, G,orbital_elements_moon,without_orbital_elements,two_bodies){  }
     
     void operator()(const state_type& R, state_type& A,  data_type t){
         A=zero_matrix<data_type>(number_bodies,dim/2);
@@ -214,10 +222,13 @@ struct SymplecticNBody : NBody{
         norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
         norm(R.first,norm_R[current]);
         energy_result.push_back(EnergyIntegral(R_matrix,norm_R[current]));
-        state_vector distance_moon = row(R_matrix,0)-row(R_matrix,1);
-        std::for_each(distance_moon.begin(),distance_moon.end(),[](data_type &x){x=ABS_(x);});
-        orbital_elements_moon.push_back(std::move(state_vector(4)));
-        get_orbital_elements(distance_moon,0,1,orbital_elements_moon[current]);
+        if(!without_orbital_elements){
+            state_vector distance_moon = row(R_matrix,two_bodies.first)-row(R_matrix,two_bodies.second);
+            std::for_each(distance_moon.begin(),distance_moon.end(),[](data_type &x){x=ABS_(x);});
+            orbital_elements_moon.push_back(std::move(state_vector(4)));
+            get_orbital_elements(distance_moon,two_bodies.first,two_bodies.second,
+            orbital_elements_moon[current]);
+        }
     }
     bool operator()(const symplectic_type& X, const symplectic_type& Y){
         state_type norm_Y=std::move(state_type(number_bodies,number_bodies));
@@ -279,33 +290,48 @@ struct Arguments_t{
     unsigned &bits, &number_bodies, &number_steps, &dim;
     type &time_end, &precision_energy, &distance_encounter, &G;
     std::string &name_integrator;
-    bool &without_controlled_step;
+    bool &without_controlled_step,&without_orbital_elements;
     Arguments_t(unsigned &number_bodies,type &time_end,unsigned &number_steps,unsigned &bits,
     type &precision_energy, std::string &name_integrator, unsigned &dim,
-    type &distance_encounter, bool &without_controlled_step, type &G) : 
-    bits(bits), number_bodies(number_bodies),time_end(time_end),
+    type &distance_encounter, bool &without_controlled_step, type &G,
+    bool &without_orbital_elements) : bits(bits), number_bodies(number_bodies),time_end(time_end),
     number_steps(number_steps),precision_energy(precision_energy),
     name_integrator(name_integrator), dim(dim), distance_encounter(distance_encounter),
-    without_controlled_step(without_controlled_step), G(G){ }
+    without_controlled_step(without_controlled_step), G(G),
+    without_orbital_elements(without_orbital_elements){ }
     void Parser(int argc, char *const argv[]){
         int i, longIndex=0;
         std::string ss;
         static const char* shortopts = "b:M:t:N:p:d:e:G:";
         static const struct option longOpts[] ={
             {"integrator",required_argument, NULL,0},
-            {"without_controlled_step",no_argument, NULL, 0}  
+            {"without_controlled_step",no_argument, NULL, 0} ,
+            {"without_orbital_elements",no_argument, NULL, 0}
         };
         auto opt = getopt_long(argc,argv,shortopts,longOpts,&longIndex);
         while(opt != -1){
             switch(opt){
                 case 'b':
-                    ss=optarg;
-                    i = boost::lexical_cast<int>(ss);
-                    if(i < 64){
-                        std::cout << "Don't possible use less 64 bits";
+                    #ifdef ANY_PRESICION
+                        ss=optarg;
+                        i = boost::lexical_cast<int>(ss);
+                        if(i < 64){
+                            std::cout << "Don't possible use less 64 bits";
+                            exit(-1);
+                        }else
+                            bits = i;
+                    #endif
+                    
+                    #ifdef DOUBLE_PRESICION
+                        std::cout << "Precision is double, you can't change number of bits";
                         exit(-1);
-                    }else
-                        bits = i;
+                    #endif
+                    
+                    #ifdef FLOAT_PRESICION
+                        std::cout << "Precision is float, you can't change number of bits";
+                        exit(-1);
+                    #endif
+                    
                     break;
                 case 'M':
                     ss=optarg;
@@ -403,6 +429,8 @@ struct Arguments_t{
                     if("without_controlled_step" == longOpts[longIndex].name){
                         without_controlled_step = 1;
                     }
+                    if("without_orbital_elements" == longOpts[longIndex].name)
+                        without_orbital_elements = 1;
                     break;
                 default :
                     {
@@ -672,27 +700,38 @@ int main(int argc, char *const argv[]){
     symplectic_type Z;
     std::string name_integrator = "RK4";
     std::string type_integrator = "standard";
-    bool without_controlled_step = 0;
+    bool without_controlled_step = 0, without_orbital_elements = 0;
+    std::pair<unsigned,unsigned> two_bodies;
     //runge_kutta4<state_type> rk;
     //controlled_stepper_type controlled_stepper;
     
     
     file_size.open("file_size.dat",std::ios_base::in);
     file_size >> T >> N >> M >> dim >> bits >> distance_encounter;
+    file_size >> two_bodies.first >> two_bodies.second;
     file_size.close();
     std::cout << distance_encounter << std::endl;
     Arguments_t<data_type> keys(M,T,N,bits,precision_energy,name_integrator,dim,
-    distance_encounter,without_controlled_step,G);
+    distance_encounter,without_controlled_step,G,without_orbital_elements);
     keys.Parser(argc,argv);
 
+    #ifdef ANY_PRESICION
     std::cout.precision(bits);
     out.precision(bits);
     energy.precision(bits);
     mpf_set_default_prec(bits);
-    std::cout << mpf_get_default_prec() << std::endl;
+    std::cout << "PRESICION: " << mpf_get_default_prec() << std::endl;
+    #endif
+
+    #ifdef DOUBLE_PRESICION
+    std::cout << "DOUBLE PRESICION" << std::endl;
+    #endif
+
+    #ifdef FLOAT_PRESICION
+    std::cout << "FLOAT PRESICION" << std::endl;
+    #endif
     
 
-    
     m.resize(M);
     X0.resize(M,dim);
     
@@ -723,9 +762,9 @@ int main(int argc, char *const argv[]){
     }
 
     NBody nb(state_result, time_result, energy_result, precision_energy,
-    m,current,dim,norm_R,G,orbital_elements_moon);
+    m,current,dim,norm_R,G,orbital_elements_moon,without_orbital_elements,two_bodies);
     SymplecticNBody snb(state_result, time_result, energy_result,  precision_energy, m,current,
-    dim,norm_R,G, orbital_elements_moon);
+    dim,norm_R,G, orbital_elements_moon,without_orbital_elements,two_bodies);
     std::cout << type_integrator << std::endl;
     if(type_integrator == "standard"){
         Integrate_based_args.integrator_call_standard(nb , Y , t0, data_type(T/N), N, nb,
@@ -758,15 +797,15 @@ int main(int argc, char *const argv[]){
         out << std::endl << std::endl;
     }
     out.close();
-    
-    moon.open("moon.dat",std::ios_base::trunc);
-    for(unsigned i=0;i<=current;++i){
-        for(unsigned k=0;k<4;++k)
-            moon << orbital_elements_moon[i](k) << " ";
-        moon << std::endl;
+    if(!without_orbital_elements){
+        moon.open("moon.dat",std::ios_base::trunc);
+        for(unsigned i=0;i<=current;++i){
+            for(unsigned k=0;k<4;++k)
+                moon << orbital_elements_moon[i](k) << " ";
+            moon << std::endl;
+        }
+        moon.close();
     }
-    moon.close();
-    
     /*
       for(unsigned j=0;j<M;++j){
         out.open(filenamestr("NBodyRK_",j,".dat"),std::ios_base::trunc);
