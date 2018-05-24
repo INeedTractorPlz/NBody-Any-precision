@@ -18,7 +18,7 @@
 #include<string>
 #include<iostream>
 
-#define ANY_PRESICION
+#define DOUBLE_PRESICION
 
 #ifdef ANY_PRESICION
 #define ABS_ abs
@@ -651,14 +651,12 @@ struct Integrate_based_args_t{
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
         if(args.distance_encounter == 0){
-            std::cout << "distance_encounter =" << args.distance_encounter << std::endl;
             if(args.without_controlled_step)
                 integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},
                 [](const Type& X, const Type& Y){return -1;});
             else
                 integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},Err);
         }else{
-            std::cout << "distance_encounter =" <<  args.distance_encounter << std::endl;
             if(args.without_controlled_step)
                 integrate(rk, sysF, X0, t, h, n, Obs,Bad,[](const Type& X, const Type& Y){return -1;});
             else
@@ -755,7 +753,7 @@ int main(int argc, char *const argv[]){
     m.resize(M);
     X0.resize(M,dim);
     orbital_elements_result.resize(number_orbital_elements);
-    
+
     file_mass.open("file_mass.dat",std::ios_base::in);
     for(unsigned i=0;i<M;++i){
         file_mass >> m[i];
