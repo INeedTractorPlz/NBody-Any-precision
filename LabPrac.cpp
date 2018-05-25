@@ -115,6 +115,8 @@ state_vector cross_product(const state_vector &u, const state_vector &v){
 }
 
 struct NBody{
+    std::ofstream res_file,energy_file,orbital_file;
+    std::string name_res,name_energy,name_orbital;
     std::vector< state_type >& m_states;
     std::vector< data_type >& m_times, &energy_result;
     std::vector<std::vector<state_vector> > &orbital_elements_result; 
@@ -132,11 +134,13 @@ struct NBody{
     std::vector<state_type >& norm_R, data_type &G,
     std::vector<std::vector<state_vector> > &orbital_elements_result,
     std::vector<std::pair<unsigned, unsigned> > pairs_of_bodies,
-    unsigned number_orbital_elements):m_states(m_states),
+    unsigned number_orbital_elements, const char *name_res, const char *name_energy,
+    const char *name_orbital):m_states(m_states),
     m_times(m_times),m(m), energy_result(energy_result),precision_energy(precision_energy),
     current(current),dim(dim), norm_R(norm_R),number_bodies(m.size()), G(G),
     orbital_elements_result(orbital_elements_result),
-    pairs_of_bodies(pairs_of_bodies),number_orbital_elements(number_orbital_elements){    }
+    pairs_of_bodies(pairs_of_bodies),number_orbital_elements(number_orbital_elements),
+    name_res(name_res),name_energy(name_energy),name_orbital(name_orbital){    }
 
     void operator()(const state_type& R, state_type& A,  data_type t){
         A=zero_matrix<data_type>(number_bodies,dim);
@@ -158,18 +162,7 @@ struct NBody{
     }    
     void operator()( const state_type &R , data_type t ){
         if(t!=0) ++current;
-        m_states.push_back(R); 
-        m_times.push_back(t);
-        norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
-        norm(R,norm_R[current]);
-        energy_result.push_back(EnergyIntegral(R,norm_R[current]));
-        for(unsigned i=0;i<number_orbital_elements;++i){
-            state_vector distance_i = row(R,pairs_of_bodies[i].first)-row(R,pairs_of_bodies[i].second);
-            std::for_each(distance_i.begin(),distance_i.end(),[](data_type &x){x=ABS_(x);});
-            orbital_elements_result[i].push_back(std::move(state_vector(4)));
-            get_orbital_elements(distance_i,pairs_of_bodies[i].first,pairs_of_bodies[i].second,
-            orbital_elements_result[i][current]);
-        }
+        result_record(R,t);
     }
 
     bool operator()(const state_type& X, const state_type& Y){
@@ -185,6 +178,8 @@ struct NBody{
     data_type EnergyIntegral(const state_type& R, const state_type& norm_r);
     void get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
     state_vector& orbital_elements);
+    void result_record(const state_type &R, data_type t);
+    void output_to_file(const state_type &R, data_type t);
 };
 
 struct SymplecticNBody : NBody{
@@ -194,10 +189,11 @@ struct SymplecticNBody : NBody{
     std::vector<state_type >& norm_R, data_type &G,
     std::vector<std::vector<state_vector> > &orbital_elements_result,
     std::vector<std::pair<unsigned,unsigned> > pairs_of_bodies,
-    unsigned number_orbital_elements):
+    unsigned number_orbital_elements,const char *name_res, const char *name_energy,
+    const char *name_orbital):
     NBody(m_states, m_times, energy_result, precision_energy,m,
     current, dim, norm_R, G,orbital_elements_result,pairs_of_bodies,
-    number_orbital_elements){  }
+    number_orbital_elements,name_res,name_energy,name_orbital){  }
     
     void operator()(const state_type& R, state_type& A,  data_type t){
         A=zero_matrix<data_type>(number_bodies,dim/2);
@@ -254,6 +250,20 @@ struct SymplecticNBody : NBody{
     }
 };
 
+void NBody::result_record(const state_type &R, data_type t){
+    m_states.push_back(R); 
+    m_times.push_back(t);
+    norm_R.push_back(std::move(state_type(number_bodies,number_bodies))); 
+    norm(R,norm_R[current]);
+    energy_result.push_back(EnergyIntegral(R,norm_R[current]));
+    for(unsigned i=0;i<number_orbital_elements;++i){
+        state_vector distance_i = row(R,pairs_of_bodies[i].first)-row(R,pairs_of_bodies[i].second);
+        std::for_each(distance_i.begin(),distance_i.end(),[](data_type &x){x=ABS_(x);});
+        orbital_elements_result[i].push_back(std::move(state_vector(4)));
+        get_orbital_elements(distance_i,pairs_of_bodies[i].first,pairs_of_bodies[i].second,
+        orbital_elements_result[i][current]);
+    }
+}
 
 void NBody::get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
 state_vector& orbital_elements){
@@ -285,10 +295,22 @@ data_type NBody::EnergyIntegral(const state_type& R, const state_type& norm_r){
         for(unsigned j=i+1;j<m.size();++j)
             U-=m[j]*m[i]/(norm_r(i,j));
         E+=U*G;
-        E+=m[i]*inner_prod(row(subrange(R,0,number_bodies,dim/2,dim),i),row(subrange(R,0,number_bodies,dim/2,dim),i))/2;
-        //E+=m[i]*(R(i,3)*R(i,3)+R(i,4)*R(i,4)+R(i,5)*R(i,5))/2;
+        E+=m[i]*inner_prod(row(subrange(R,0,number_bodies,dim/2,dim),i),
+        row(subrange(R,0,number_bodies,dim/2,dim),i))/2;
     }    
     return E;
+}
+
+
+void NBody::norm(const state_type& R, state_type& norm_r){
+   for(unsigned i=0;i<R.size1();++i){
+        for(unsigned j=0;j<i;++j)
+            norm_r(i,j)=norm_r(j,i);
+         for(unsigned j=i+1;j<R.size1();++j){
+            norm_r(i,j)=norm_2(row(subrange(R,0,number_bodies,0,dim/2),i)
+            -row(subrange(R,0,number_bodies,0,dim/2),j));
+        }
+    }
 }
 
 template<typename type>
@@ -456,21 +478,6 @@ struct Arguments_t{
     }
 };
 
-
-
-void NBody::norm(const state_type& R, state_type& norm_r){
-   //data_type r1, r2, r3;
-   for(unsigned i=0;i<R.size1();++i){
-        for(unsigned j=0;j<i;++j)
-            norm_r(i,j)=norm_r(j,i);
-         for(unsigned j=i+1;j<R.size1();++j){
-            norm_r(i,j)=norm_2(row(subrange(R,0,number_bodies,0,dim/2),i)-row(subrange(R,0,number_bodies,0,dim/2),j));
-            //r1=R(i,0)-R(j,0); r2=R(i,1)-R(j,1); 
-            //r3=R(i,2)-R(j,2);
-            //norm_r(i,j)=sqrt(r1*r1+r2*r2+r3*r3);
-        }
-    }
-}
 
 const char* filenamestr(const char* s1, unsigned j, const char* s2){
     static std::string ss;
@@ -781,9 +788,11 @@ int main(int argc, char *const argv[]){
     }
 
     NBody nb(state_result, time_result, energy_result, precision_energy,
-    m,current,dim,norm_R,G,orbital_elements_result, pairs_of_bodies,number_orbital_elements);
+    m,current,dim,norm_R,G,orbital_elements_result, pairs_of_bodies,number_orbital_elements,
+    "res.dat","orbital_elements.dat","energy.dat");
     SymplecticNBody snb(state_result, time_result, energy_result,  precision_energy, m,current,
-    dim,norm_R,G, orbital_elements_result,pairs_of_bodies,number_orbital_elements);
+    dim,norm_R,G, orbital_elements_result,pairs_of_bodies,number_orbital_elements,
+    "res.dat","orbital_elements.dat","energy.dat");
     std::cout << type_integrator << std::endl;
     if(type_integrator == "standard"){
         Integrate_based_args.integrator_call_standard(nb , Y , t0, data_type(T/N), N, nb,
@@ -817,7 +826,7 @@ int main(int argc, char *const argv[]){
     }
     out.close();
     if(number_orbital_elements>0){
-        moon.open("moon.dat",std::ios_base::trunc);
+        moon.open("orbital_elements.dat",std::ios_base::trunc);
         for(unsigned i=0;i<=current;++i){
             for(unsigned l=0;l<number_orbital_elements;++l){
                 for(unsigned k=0;k<4;++k)
@@ -839,7 +848,7 @@ int main(int argc, char *const argv[]){
         out.close();
     }
     */
-    energy.open("NBodyRK_energy.dat",std::ios_base::trunc);
+    energy.open("energy.dat",std::ios_base::trunc);
     for(unsigned i=0;i<=current;++i){
         energy <<  "h(" << i << ")= " << energy_result[i] << std::endl;
         delta=ABS_((energy_result[0]-energy_result[i])/energy_result[i]);
