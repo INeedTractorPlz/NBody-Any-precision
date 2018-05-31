@@ -1,48 +1,55 @@
-Инструкция по использованию программы, интегрирующей задачу N тел.
+Instruction to use N-bodies integrator.
 
-Исходник: LabPrac.cpp
-Запуск: ./LP
+Code: LabPrac.cpp
+Starting: ./LP
 
-Входные данные:
-file_initial.dat
-Содержит начальные данные(координаты и скорости всех тел в начальный момент времени).
-В каждой строчке первые три значения координаты, вторые скорости. Порядок указания начальных данных тел должен быть таким же, как порядок указания масс в файле file_mass.dat
-file_mass.dat
-Содержит массы тел.
-file_size.dat
-Содержит время конца интервала интегрирования, число шагов, число тел, размерность задачи умноженную на 2,число бит в точности типа mpf_class, расстояние на котором считается, что тела столкнулись(если 0, то условие столкновения игнорируется), номер первого(спутника) и второго(планеты) тела для рассчёта элементов орбиты(большая полуось, эксцентриситет, наклон, перегелийное расстояние) ровно в таком порядке.
+First, you have opportunity use some macroses in Lab Prac.cpp.
+  FLOAT_PRESICION, DOUBLE_PRESICION, LONG_DOUBLE_PRESICION,ANY_PRESICION - obviously, switch precision of calculations.
+  For any precision uses mpfr library, also you could using a key -b  only with this macros.
+  With MEMORY_FREEING_BY_CURRENT, data will recording in RAM. With INSTANT_OUTPUT_TO_FILE, will instant recording in file(very slow).
+  A key --freeing_memory_current only with this.
 
-Выходные данные:
-res.dat
-По блокам в каждый момент времени выводится положения и скорости тел в том же порядке, что и для начального момента времени в файле file_initial.dat
+	
+Input data:
+  file_initial.dat
+    Initial data for Caushy problem.
+    In each string first three value - coordinates, next - velocities. Order of initial data must match order masses of bodies in file_mass.dat
+  file_mass.dat
+    Contains bodies masses.
+  file_size.dat
+    Contains T(integration end time), N(number of steps), M(number of bodies), dim(problem dimension * 2 ), bits(number of bits in data type), and pairs of ordinal numbers of bodies(in order match order in file_mass.dat and file_initial.dat), for which will calculate elements of orbits.
+  file_encounters.dat
+    Contains pairs of ordinal numbers of bodies(in order match order in file_mass.dat and file_initial.dat), which could collid, and distances, equaling sum of bodies radiuses.
 
-Размерность данных по умолчанию:
-Массы Солнца, астрономические единицы, года.
-G=4*pi^2.
-Возможные ключи:
--b Число бит в точности типа mpf_class.
--G Изменить значение гравитационной постоянной(если в вашей задаче другая размерность).
--N Число шагов(при использовании контроля шага, шаг не станет больше изначального значения t/N).
--M Число тел(можно указывать только в случае, если начальные данные в файлах file_initial.dat и file_mass содержат достаточное количество тел).
--t Конечный момент времени.
--p Условие на уменьшение шага abs((E(t)-E(t+h))/E(t)) > presicion_energy. По умолчанию это просто 0(т.е. с точностью заданного типа), с помощью этого ключа значение можно поменять.
--d Размерность задачи, умноженная на 2.
--e Расстояние на котором считается, что тела столкнулись.
---integrator Выбор интегратора("RK4","RK5","LP").
---without_controlled_step Убирает условие на контроль шага.
---without_orbital_elements Убирает вычисление и вывод элементов орбиты.
+Output data:
+  res.dat
+    Time, coordinates, velocities.
+  orbital_elements.dat
+    Time, semimajor axis, eccentricity, inclination, periapsis distance.
+  distance_between_pairs.dat
+    Time, distances.
 
-ОСОБОЕ ВНИМАНИЕ.
--b нужно включать самым первым(по крайней мере до -t и -e), т.к. в противном случае точность задания -t и -e будет 64 бита.
-Контроль шага требует изменение значения precision_energy вручную, значения по умолчанию в большинстве случаев прибодит к очень маленькому шагу.
 
-Примеры:
-Задача Лидова-Кодзаи для Луны, Земли и Солнца(угол между эклиптикой и орбитой Луны 90 градусов).
-Kozai.gif и Kozai.dat
-./LP --integrator="RK5" -p 1.0e-19 -t 6.0 -N 6000
-Условие на столкновение distance_encounter=0.000054(а.е.).
-Результаты:
-Столкновение произошло через 4.91 года, интегрировалось примерно 127 тысяч шагов.
-В файле Kozai.dat выведены данные до момента столкновения(после интегрирование было прервано).
-Kozai.gif нарисована с помощью скрипта gnuplot из файла Kozai.dat через каждые 500 шагов.
-8.gif проитегрирована восьмёрка с шагом 1.0е-3, G=1, точностью 192 бита, на интервале времени в 6 лет.
+Default dimension of data:
+  Sun mass, astronomical units, years.
+  G=4*pi^2.
+
+All keys take priority over data files.
+
+Keys:
+-b Number bits in mpf_class precision. A key -b must be included first, because otherwise precision of t, h and other will be default 64 bits.
+-G Gravitational constant(if problem have another dimension).
+-N Number steps(if use controlled step, then t/N will minimal step).
+-h Size of step(if use controlled step, then h will minimal step).
+-M Number bodies.
+-t Integration end time.
+-p Step's decrease condition is abs((E(t)-E(t+h))/E(t)) > presicion_energy, where E(t) is energy integral in point t. Default equal 0. By dint of a key can be changed value precision_energy.
+-d Problem dimension * 2.
+--integrator Integrator name("RK4","RK5","LP").
+--without_controlled_step 
+--number_orbital_elements Number first pairs, for which do calculate orbital elements.
+--number_encounters Number first pairs, for which do encounter test.
+--focal_body Focal body is body relative to which will calculate coordinates and velocities other bodies.
+--recording_frequency Frequency to which data recording to file.
+--freeing_memory_current Number of steps after which memory will free and recording to file. Can be equal "default"(1.0e-6).
+

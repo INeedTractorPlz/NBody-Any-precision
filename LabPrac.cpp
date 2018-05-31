@@ -18,15 +18,23 @@
 #include<string>
 #include<iostream>
 
-#define INSTANT_OUTPUT_TO_FILE
-//#define ENTRY_TO_ARRAY
+//#define INSTANT_OUTPUT_TO_FILE
+#define MEMORY_FREEING_BY_CURRENT
+
 
 #define DOUBLE_PRESICION
+//#define ANY_PRESICION
 
 #ifdef ANY_PRESICION
 #define ABS_ abs
 typedef mpf_class data_type;
 #endif
+
+#ifdef LONG_DOUBLE_PRESICION
+#define ABS_ fabs
+typedef long double data_type;
+#endif
+
 
 #ifdef DOUBLE_PRESICION
 #define ABS_ fabs
@@ -55,12 +63,29 @@ struct RungeKutta5_Fehlberg;
 template<typename type, typename Type>
 struct LeapFrog;
 
+
+
+const char* filenamestr(const char* s1, unsigned j, const char* s2){
+    static std::string ss;
+    ss="";
+    ss+= s1; ss+=boost::lexical_cast<std::string>(j); ss+=s2;
+    return ss.c_str();
+}
+
 template<typename type>
 std::ostream& operator<<(std::ostream& os, const std::pair<type,type> in){
     os << in.first << std::endl;
     os << in.second << std::endl;
     return os;
 } 
+
+unsigned mpf_to_unsigned(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
+    mpfr_t out_t;
+    unsigned result;
+    mpf_class out;
+    mpfr_init_set_f(out_t,in.get_mpf_t(),rnd);
+    return mpfr_get_ui(out_t,rnd);
+}
 
 mpf_class atan(mpf_class in,mpfr_rnd_t rnd=MPFR_RNDN){
     mpfr_t out_t;
@@ -118,12 +143,10 @@ state_vector cross_product(const state_vector &u, const state_vector &v){
 }
 
 struct NBody{
-    #ifdef INSTANT_OUTPUT_TO_FILE
     //static std::ofstream res_file,energy_file,orbital_file;
-    std::string res_file_name,energy_file_name,orbital_file_name;
-    data_type &max_delta,energy0,energy;
-    #endif
-    #ifdef ENTRY_TO_ARRAY
+    std::string res_file_name,energy_file_name,orbital_file_name,distance_file_name;
+    data_type &max_delta,&energy0,&energy;
+    #ifdef MEMORY_FREEING_BY_CURRENT
     std::vector< state_type >& m_states;
     std::vector< data_type >& m_times, &energy_result;
     std::vector<std::vector<state_vector> > &orbital_elements_result; 
@@ -134,10 +157,14 @@ struct NBody{
     unsigned number_orbital_elements;
     data_type &G,pi = atan(data_type(1.0))*4;
     const data_type precision_energy;
-    unsigned &current;
+    unsigned &current,number_steps;
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    int &freeing_memory_current;
+    #endif
+    int &recording_frequency, &focal_body;
     unsigned number_bodies,dim;
     NBody(
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result, std::vector<state_type >& norm_R,
     std::vector<std::vector<state_vector> > &orbital_elements_result,
@@ -146,21 +173,25 @@ struct NBody{
     const data_type &precision_energy, data_type &G,
     std::vector<std::pair<unsigned, unsigned> > pairs_of_bodies,
     unsigned number_orbital_elements
-    #ifdef INSTANT_OUTPUT_TO_FILE
     ,const char *res_file_name,const char *energy_file_name, const char *orbital_file_name,
-    data_type &max_delta
+    const char *distance_file_name, data_type &max_delta,data_type &energy0,data_type &energy,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    int &freeing_memory_current,
     #endif
+    int &recording_frequency, int &focal_body
     ):
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     m_states(m_states),m_times(m_times), energy_result(energy_result),norm_R(norm_R),
     orbital_elements_result(orbital_elements_result),
     #endif
     m(m),current(current),dim(dim), number_bodies(m.size()), precision_energy(precision_energy), G(G),
     pairs_of_bodies(pairs_of_bodies),number_orbital_elements(number_orbital_elements)
-    #ifdef INSTANT_OUTPUT_TO_FILE
     ,res_file_name(res_file_name),energy_file_name(energy_file_name),orbital_file_name(orbital_file_name),
-    max_delta(max_delta)
+    distance_file_name(distance_file_name),max_delta(max_delta),energy0(energy0), energy(energy),
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    freeing_memory_current(freeing_memory_current),
     #endif
+    recording_frequency(recording_frequency),focal_body(focal_body)
     {  
         max_delta = 0;
     }
@@ -184,31 +215,56 @@ struct NBody{
         subrange(A,0,number_bodies,dim/2,dim)*=G;
     }    
     void operator()( const state_type &R , data_type t ){
-        if(t!=0) ++current;
-        #ifdef ENTRY_TO_ARRAY
-        result_record(R,t);
-        #endif
-        #ifdef INSTANT_OUTPUT_TO_FILE
-        if(current==0){
+        if(t!=0) ++number_steps;
+        
+        if(number_steps%recording_frequency == 0){
+            if(t!=0) ++current;
+            #if defined(MEMORY_FREEING_BY_CURRENT)
+            if(freeing_memory_current != -1){
+                if(current == freeing_memory_current){
+                    output_to_file();
+                    std::cout << "Clear memory current = " << current << std::endl;
+                    energy_result.clear();
+                    m_states.clear();
+                    m_times.clear();
+                    for(unsigned i = 0; i < number_orbital_elements; ++i)
+                        orbital_elements_result[i].clear();
+                    norm_R.clear();
+                    current = 0;
+                }
+            }
+            result_record(R,t);
+            energy = energy_result[current];
+            #endif
+        
+            #ifdef MEMORY_FREEING_BY_CURRENT
+            if(freeing_memory_current != -1){
+            #endif
+                if(t == 0){
+                    state_type norm_r(number_bodies,number_bodies);
+                    norm(R,norm_r);
+                    energy0 = EnergyIntegral(R,norm_r);    
+                    energy = energy0;
+                }
+            #ifdef MEMORY_FREEING_BY_CURRENT
+            }
+            #endif
+
+            #ifdef INSTANT_OUTPUT_TO_FILE
+            output_to_file(R,t);
+            #endif
+        }else{
             state_type norm_r(number_bodies,number_bodies);
             norm(R,norm_r);
-            energy0 = EnergyIntegral(R,norm_r);    
-            energy=energy0;
+            energy = EnergyIntegral(R,norm_r);
         }
-        output_to_file(R,t);
-        #endif
     }
 
     bool operator()(const state_type& X, const state_type& Y){
         state_type norm_Y=std::move(state_type(number_bodies,number_bodies));
         norm(Y,norm_Y);
         data_type energy_Y(EnergyIntegral(Y,norm_Y));
-        #ifdef ENTRY_TO_ARRAY
-        data_type delta=ABS_((energy_result[current]-energy_Y)/energy_result[current]);
-        #endif
-        #ifdef INSTANT_OUTPUT_TO_FILE
         data_type delta=ABS_((energy-energy_Y)/energy);
-        #endif
         //std::cout << "delta= " << delta << std::endl;
         if(delta > precision_energy) return 1;
         else return 0;
@@ -217,17 +273,20 @@ struct NBody{
     data_type EnergyIntegral(const state_type& R, const state_type& norm_r);
     void get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
     state_vector& orbital_elements,const state_type &norm_r);
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     void result_record(const state_type &R, data_type t);
     #endif
     #ifdef INSTANT_OUTPUT_TO_FILE
     void output_to_file(const state_type &R, data_type t);
     #endif
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    void output_to_file();
+    #endif
 };
 
 struct SymplecticNBody : NBody{
     SymplecticNBody(
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     std::vector< state_type >& m_states, std::vector< data_type >& m_times, 
     std::vector<data_type>& energy_result,std::vector<state_type >& norm_R,
     std::vector<std::vector<state_vector> > &orbital_elements_result, 
@@ -236,20 +295,24 @@ struct SymplecticNBody : NBody{
     const data_type &precision_energy, data_type &G,
     std::vector<std::pair<unsigned,unsigned> > pairs_of_bodies,
     unsigned number_orbital_elements
-    #ifdef INSTANT_OUTPUT_TO_FILE
     ,const char *res_file_name,const char *energy_file_name, const char *orbital_file_name,
-    data_type &max_delta
+    const char *distance_file_name, data_type &max_delta,data_type &energy0,data_type &energy,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    int &freeing_memory_current,
     #endif
+    int &recording_frequency, int &focal_body
     ):
     NBody(
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     m_states, m_times, energy_result,norm_R,orbital_elements_result, 
     #endif
     m,current, dim, precision_energy, G,pairs_of_bodies,
-    number_orbital_elements
-    #ifdef INSTANT_OUTPUT_TO_FILE
-    ,res_file_name,energy_file_name,orbital_file_name,max_delta
+    number_orbital_elements,res_file_name,energy_file_name,orbital_file_name,
+    distance_file_name,max_delta,energy0,energy,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    freeing_memory_current,
     #endif
+    recording_frequency,focal_body
     ){  }
     
     void operator()(const state_type& R, state_type& A,  data_type t){
@@ -270,23 +333,55 @@ struct SymplecticNBody : NBody{
         A*=G;
     }    
     void operator()( const symplectic_type &R , data_type t ){
-        if(t!=0) ++current;
+        if(t!=0) ++number_steps;
+        
         state_type R_matrix(number_bodies,dim);
         subrange(R_matrix,0,number_bodies,0,dim/2)=R.first;
         subrange(R_matrix,0,number_bodies,dim/2,dim)=R.second;
-        
-        #ifdef ENTRY_TO_ARRAY
-        result_record(R_matrix,t);
-        #endif
-        #ifdef INSTANT_OUTPUT_TO_FILE
-        if(current==0){
+            
+        if(number_steps%recording_frequency == 0){
+            if(t!=0){
+                ++current;
+            }
+                    
+            #if defined(MEMORY_FREEING_BY_CURRENT)
+            if(freeing_memory_current != -1){
+                if(current == freeing_memory_current){
+                    output_to_file();
+                    energy_result.clear();
+                    m_states.clear();
+                    m_times.clear();
+                    for(unsigned i = 0; i < number_orbital_elements; ++i)
+                        orbital_elements_result[i].clear();
+                    norm_R.clear();
+                    current = 0;
+                }
+            }
+            result_record(R_matrix,t);
+            energy = energy_result[current];
+            #endif
+
+            #ifdef MEMORY_FREEING_BY_CURRENT
+            if(freeing_memory_current != -1){
+            #endif
+                if(t==0){
+                    state_type norm_r(number_bodies,number_bodies);
+                    norm(R_matrix,norm_r);
+                    energy0 = EnergyIntegral(R_matrix,norm_r);    
+                    energy=energy0;
+                }
+            #ifdef MEMORY_FREEING_BY_CURRENT
+            }
+            #endif
+
+            #ifdef INSTANT_OUTPUT_TO_FILE
+            output_to_file(R_matrix,t);
+            #endif
+        }else{
             state_type norm_r(number_bodies,number_bodies);
             norm(R_matrix,norm_r);
-            energy0 = EnergyIntegral(R_matrix,norm_r); 
-            energy = energy0;   
+            energy = EnergyIntegral(R_matrix,norm_r);
         }
-        output_to_file(R_matrix,t);
-        #endif
     }
     bool operator()(const symplectic_type& X, const symplectic_type& Y){
         state_type norm_Y=std::move(state_type(number_bodies,number_bodies));
@@ -296,22 +391,15 @@ struct SymplecticNBody : NBody{
         
         norm(Y_matrix,norm_Y);
         data_type energy_Y(EnergyIntegral(Y_matrix,norm_Y));
-        #ifdef ENTRY_TO_ARRAY
-        data_type delta=ABS_((energy_result[current]-energy_Y)/energy_result[current]);
-        #endif
-        #ifdef INSTANT_OUTPUT_TO_FILE
         data_type delta=ABS_((energy-energy_Y)/energy);
-        #endif
-        //std::cout << "ABS_(energy_result[0]-energy_Y)= " << ABS_(energy_result[0]-energy_Y) << std::endl;
-        //std::cout << "energy_result[0]= " << energy_result[0] << std::endl;
-        //std::cout << "energy_Y= " << energy_Y << std::endl;
-        //std::cout << "delta= " << delta << std::endl;
         if(delta > precision_energy) return 1;
         else return 0;
     }
 };
 
-#ifdef ENTRY_TO_ARRAY    
+
+
+#ifdef MEMORY_FREEING_BY_CURRENT    
 void NBody::result_record(const state_type &R, data_type t){
     m_states.push_back(R); 
     m_times.push_back(t);
@@ -319,8 +407,8 @@ void NBody::result_record(const state_type &R, data_type t){
     norm(R,norm_R[current]);
     energy_result.push_back(EnergyIntegral(R,norm_R[current]));
     for(unsigned i=0;i<number_orbital_elements;++i){
-        state_vector distance_i = row(R,pairs_of_bodies[i].first)-row(R,pairs_of_bodies[i].second);
-        std::for_each(distance_i.begin(),distance_i.end(),[](data_type &x){x=ABS_(x);});
+        state_vector distance_i = row(R,pairs_of_bodies[i].first) - row(R,pairs_of_bodies[i].second);
+        //std::for_each(distance_i.begin(),distance_i.end(),[](data_type &x){x=ABS_(x);});
         orbital_elements_result[i].push_back(std::move(state_vector(4)));
         get_orbital_elements(distance_i,pairs_of_bodies[i].first,pairs_of_bodies[i].second,
         orbital_elements_result[i][current],norm_R[current]);
@@ -330,21 +418,42 @@ void NBody::result_record(const state_type &R, data_type t){
 
 #ifdef INSTANT_OUTPUT_TO_FILE
 void NBody::output_to_file(const state_type &R, data_type t){
-    std::ofstream res_file,energy_file,orbital_file;
-    res_file.open(res_file_name,std::ios_base::out);
-    for(unsigned j=0;j<number_bodies;++j){
-        for(unsigned k=0;k<dim;++k)
-            res_file << R(j,k) << " ";
-        res_file << std::endl;
+    std::ofstream res_file,energy_file,orbital_file,distance_between_pairs;
+    
+    if(focal_body != -1){
+        res_file.open(res_file_name,std::ios_base::app);
+        for(unsigned j=0;j<number_bodies;++j){
+            for(unsigned k=0;k<dim;++k)
+                res_file << R(j,k) - R(focal_body,k) << " ";
+            res_file << std::endl;
+        }
+        res_file << std::endl << std::endl;
+        res_file.close();
+    }else{
+        res_file.open(res_file_name,std::ios_base::app);
+        for(unsigned j=0;j<number_bodies;++j){
+            for(unsigned k=0;k<dim;++k)
+                res_file << R(j,k) << " ";
+            res_file << std::endl;
+        }
+        res_file << std::endl << std::endl;
+        res_file.close();
     }
-    res_file << std::endl << std::endl;
-    res_file.close();
-
     state_type norm_r(number_bodies,number_bodies);
     norm(R,norm_r);
     
+    distance_between_pairs.open(distance_file_name,std::ios_base::app);
+    distance_between_pairs << t << " ";
+    for(unsigned l = 0; l < number_orbital_elements; ++l)
+            distance_between_pairs << 
+            norm_r(pairs_of_bodies[l].first,pairs_of_bodies[l].second) << " ";
+    distance_between_pairs << std::endl;
+    distance_between_pairs << std::endl << std::endl;
+    distance_between_pairs.close();
+
+
     if(number_orbital_elements>0){
-        orbital_file.open(orbital_file_name,std::ios_base::out);
+        orbital_file.open(orbital_file_name,std::ios_base::app);
         for(unsigned i=0;i<number_orbital_elements;++i){
             state_vector distance_i = row(R,pairs_of_bodies[i].first)-row(R,pairs_of_bodies[i].second);
             std::for_each(distance_i.begin(),distance_i.end(),[](data_type &x){x=ABS_(x);});
@@ -360,17 +469,78 @@ void NBody::output_to_file(const state_type &R, data_type t){
     }
     
     energy = EnergyIntegral(R,norm_r);
-    energy_file.open(energy_file_name,std::ios_base::out);
+    energy_file.open(energy_file_name,std::ios_base::app);
         energy_file <<  "h(" << current << ")= " << energy << std::endl;
         data_type delta=ABS_((energy0-energy)/energy0);
             if(delta > max_delta) max_delta=delta;
     energy_file.close();
 }
 #endif
+#ifdef MEMORY_FREEING_BY_CURRENT
+void NBody::output_to_file(){
+    std::ofstream res_file,energy_file,orbital_file, distance_between_pairs;
+    
+    if(focal_body != -1){
+        res_file.open(res_file_name,std::ios_base::app);
+        for(unsigned i=0;i<current;++i){
+            for(unsigned j=0;j<number_bodies;++j){
+                for(unsigned k=0;k<dim;++k)
+                    res_file << m_states[i](j,k) - m_states[i](focal_body,k) << " ";
+                res_file << std::endl;
+            }
+            res_file << std::endl << std::endl;
+        }
+        res_file.close();
+    }else{
+        res_file.open(res_file_name,std::ios_base::app);
+        for(unsigned i=0;i<current;++i){
+            for(unsigned j=0;j<number_bodies;++j){
+                for(unsigned k=0;k<dim;++k)
+                    res_file << m_states[i](j,k) << " ";
+                res_file << std::endl;
+            }
+            res_file << std::endl << std::endl;
+        }
+        res_file.close();
+    }
 
+    distance_between_pairs.open(distance_file_name,std::ios_base::app);
+    for(unsigned i=0;i<current;++i){
+        distance_between_pairs << m_times[i] << " ";
+        for(unsigned l = 0; l < number_orbital_elements; ++l)
+            distance_between_pairs << 
+            norm_R[i](pairs_of_bodies[l].first,pairs_of_bodies[l].second) << " ";
+        distance_between_pairs << std::endl;
+        distance_between_pairs << std::endl << std::endl;
+    }
+    distance_between_pairs.close();
+
+    if(number_orbital_elements>0){
+        orbital_file.open(orbital_file_name,std::ios_base::app);
+        for(unsigned i=0;i<current;++i){
+            for(unsigned l=0;l<number_orbital_elements;++l){
+                orbital_file << m_times[i] << " ";
+                for(unsigned k=0;k<4;++k)
+                    orbital_file << orbital_elements_result[l][i](k) << " ";
+                orbital_file << std::endl << std::endl;
+            }
+            orbital_file << std::endl << std::endl;
+        }
+        orbital_file.close();
+    }
+    energy_file.open(energy_file_name,std::ios_base::app);
+    for(unsigned i=0;i<current;++i){
+        energy_file <<  "h(" << i << ")= " << energy_result[i] << std::endl;
+        data_type delta=ABS_((energy0-energy_result[i])/energy0);
+        if(delta > max_delta) max_delta=delta;
+    }
+
+}
+#endif
 void NBody::get_orbital_elements(const state_vector &R, unsigned i, unsigned j,
 state_vector& orbital_elements,const state_type &norm_r){
     data_type kappa_quad,r,v;
+    data_type a,e,inclination;
     
     kappa_quad=G*(m[i]+m[j]);
     r=norm_r(i,j);
@@ -379,12 +549,11 @@ state_vector& orbital_elements,const state_type &norm_r){
     data_type h = v*v/2 - kappa_quad/r;
     state_vector c = cross_product(subrange(R,0,dim/2),subrange(R,dim/2,dim));
     
-    data_type a,e,inclination;
-    e = sqrt(1.+2*h*norm_2(c)*norm_2(c)/(kappa_quad*kappa_quad));
+    e = sqrt(1.+2.*h*inner_prod(c,c)/(kappa_quad*kappa_quad));
     a = -kappa_quad/2/h;
     
     inclination = acos(c(2)/norm_2(c));
-    
+
     orbital_elements(0) = a;
     orbital_elements(1) = e;
     orbital_elements(2) = inclination*180/pi;
@@ -418,26 +587,47 @@ void NBody::norm(const state_type& R, state_type& norm_r){
 
 template<typename type>
 struct Arguments_t{
-    unsigned &bits, &number_bodies, &number_steps, &dim,&number_orbital_elements;
-    type &time_end, &precision_energy, &distance_encounter, &G;
+    unsigned &bits, &number_bodies, &number_steps, &dim,&number_orbital_elements,
+    &number_encounters;
+    type &time_end, &precision_energy, &G, &step;
     std::string &name_integrator;
     bool &without_controlled_step;
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    int &freeing_memory_current;
+    #endif
+    int &recording_frequency, &focal_body;
     Arguments_t(unsigned &number_bodies,type &time_end,unsigned &number_steps,unsigned &bits,
     type &precision_energy, std::string &name_integrator, unsigned &dim,
-    type &distance_encounter, bool &without_controlled_step, type &G,
-    unsigned &number_orbital_elements) : bits(bits), number_bodies(number_bodies),time_end(time_end),
+    unsigned &number_encounters, bool &without_controlled_step, type &G, type &step,
+    unsigned &number_orbital_elements,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    int &freeing_memory_current,
+    #endif
+    int &recording_frequency, int &focal_body
+    ) : bits(bits), number_bodies(number_bodies),time_end(time_end),
     number_steps(number_steps),precision_energy(precision_energy),
-    name_integrator(name_integrator), dim(dim), distance_encounter(distance_encounter),
-    without_controlled_step(without_controlled_step), G(G),
-    number_orbital_elements(number_orbital_elements){ }
+    name_integrator(name_integrator), dim(dim), number_encounters(number_encounters),
+    without_controlled_step(without_controlled_step), G(G),step(step),
+    number_orbital_elements(number_orbital_elements),
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    freeing_memory_current(freeing_memory_current),
+    #endif
+    recording_frequency(recording_frequency),focal_body(focal_body)
+    { }
     void Parser(int argc, char *const argv[]){
         int i, longIndex=0;
         std::string ss;
-        static const char* shortopts = "b:M:t:N:p:d:e:G:";
+        static const char* shortopts = "b:M:t:N:p:d:G:h:";
         static const struct option longOpts[] ={
             {"integrator",required_argument, NULL,0},
             {"without_controlled_step",no_argument, NULL, 0} ,
-            {"without_orbital_elements",required_argument, NULL, 0}
+            {"number_orbital_elements",required_argument, NULL, 0},
+            #ifdef MEMORY_FREEING_BY_CURRENT
+            {"freeing_memory_current",required_argument, NULL, 0},
+            #endif
+            {"recording_frequency",required_argument, NULL, 0},
+            {"focal_body",required_argument, NULL, 0},
+            {"number_encounters",required_argument, NULL, 0}
         };
         auto opt = getopt_long(argc,argv,shortopts,longOpts,&longIndex);
         while(opt != -1){
@@ -505,7 +695,23 @@ struct Arguments_t{
                     break;
                 case 'N':
                     ss=optarg;
-                    i = boost::lexical_cast<int>(ss);
+                    try {
+                        i = boost::lexical_cast<int>(ss);
+                    }catch(...){
+                        #ifdef ANY_PRESICION
+                        try{
+                            i = mpf_to_unsigned(mpf_class_set_str(optarg,bits));
+                        }
+                        #else
+                        try{
+                            i = static_cast<int>(boost::lexical_cast<type>(ss));
+                        }
+                        #endif
+                        catch(...){
+                            std::cout << "This string can't be converted to int or type " << 
+                            typeid(type).name() << std::endl;
+                        }
+                    }
                     if(i < 1){
                         std::cout << "Are you sure, that want divide a segment on a " << i << "parts?";
                         std::cout << std::endl;
@@ -538,16 +744,16 @@ struct Arguments_t{
                     }else
                         dim = 2*i;
                     break;
-                case 'e':
+                case 'h':
                     #ifdef ANY_PRESICION
-                        distance_encounter = mpf_class_set_str(optarg,bits);
+                        step = mpf_class_set_str(optarg,bits);
                     #else
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
-                            distance_encounter = boost::lexical_cast<type>(ss);
+                            step = boost::lexical_cast<type>(ss);
                         }
                         catch(...){
-                            std::cout << "String can't be converted to this type(" << 
+                            std::cout << "This string can't be converted to this type(" << 
                             typeid(type).name() << ")" << std::endl;
                             exit(-1);
                         }
@@ -560,7 +766,7 @@ struct Arguments_t{
                     if("without_controlled_step" == longOpts[longIndex].name){
                         without_controlled_step = 1;
                     }
-                    if("without_orbital_elements" == longOpts[longIndex].name){
+                    if("number_orbital_elements" == longOpts[longIndex].name){
                         try{
                             std::string ss=boost::lexical_cast<std::string>(optarg);
                             number_orbital_elements = boost::lexical_cast<unsigned>(ss);
@@ -568,6 +774,47 @@ struct Arguments_t{
                             number_orbital_elements = 0;
                         }
                     }
+                    if("number_encounters" == longOpts[longIndex].name){
+                        try{
+                            std::string ss=boost::lexical_cast<std::string>(optarg);
+                            number_encounters = boost::lexical_cast<unsigned>(ss);
+                        }catch(...){
+                            number_encounters = 0;
+                        }
+                    }
+                    if("focal_body" == longOpts[longIndex].name){
+                        try{
+                            std::string ss=boost::lexical_cast<std::string>(optarg);
+                            focal_body = boost::lexical_cast<int>(ss);
+                        }catch(...){
+                            std::cout << "Unsuitable type for number of body" << std::endl;
+                        }
+                    }
+                    if("recording_frequency"== longOpts[longIndex].name){
+                        try{
+                            std::string ss=boost::lexical_cast<std::string>(optarg);
+                            if(ss == "default"){
+                                recording_frequency = 100;
+                            }else{                        
+                                recording_frequency = boost::lexical_cast<int>(ss);
+                            }
+                        }catch(...){
+                        }
+                    }
+                    
+                    #ifdef MEMORY_FREEING_BY_CURRENT
+                    if("freeing_memory_current"== longOpts[longIndex].name){
+                        try{
+                            std::string ss=boost::lexical_cast<std::string>(optarg);
+                            if(ss == "default"){
+                                freeing_memory_current = 1000000;
+                            }else{                        
+                                freeing_memory_current = boost::lexical_cast<int>(ss);
+                            }
+                        }catch(...){
+                        }
+                    }
+                    #endif
                     break;
                 default :
                     {
@@ -581,13 +828,6 @@ struct Arguments_t{
     }
 };
 
-
-const char* filenamestr(const char* s1, unsigned j, const char* s2){
-    static std::string ss;
-    ss="";
-    ss+= s1; ss+=boost::lexical_cast<std::string>(j); ss+=s2;
-    return ss.c_str();
-}
 
 
 template<typename type, typename Type>
@@ -641,50 +881,59 @@ struct LeapFrog{
 
 template<typename Type, typename type>
 struct Encounter{
-    type distance_encounter;
-    type min_distance=1.0;
-    Encounter(const type& in) : distance_encounter(in){}
+    std::vector<std::pair<unsigned,unsigned> > pairs_of_encounters;
+    std::vector<type> encounter_distances;
+    unsigned number_encounters;
+    Encounter(const std::vector<std::pair<unsigned,unsigned> >& pairs_of_encounters,
+    const std::vector<type> &encounter_distances, unsigned number_encounters)
+    : pairs_of_encounters(pairs_of_encounters),encounter_distances(encounter_distances),
+    number_encounters(number_encounters)
+    {   }
     bool operator()(const Type& X, const type& t){
-        if(norm_2(subrange(row(X,0) - row(X,1),0,3)) <= distance_encounter){
-            std::cout << "ENCOUNTER!! in time " << t << std::endl;
-            return 0;
-        }else{
-            //std::cout << "min_distance = " << min_distance << std::endl;
-            //std::cout << "current_distance= " << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
-            if(min_distance > norm_2(subrange(row(X,0) - row(X,1),0,3)))
-                min_distance = norm_2(subrange(row(X,0) - row(X,1),0,3));
-            //std::cout << norm_2(subrange(row(X,0) - row(X,1),0,3)) << "   " << t << std::endl;
-            return 1;
+        for(unsigned l = 0; l < number_encounters; ++l){
+            if(norm_2(subrange(row(X,pairs_of_encounters[l].first)
+            - row(X,pairs_of_encounters[l].second),0,3)) <= encounter_distances[l]){
+                std::cout << "ENCOUNTER!! between " << pairs_of_encounters[l].first 
+                << " and " << pairs_of_encounters[l].second 
+                << " in time " << t << std::endl;
+                return 0;
+            }
         }
+        return 1;
     } 
 };
 
 template<typename Type, typename type>
 struct SymplecticEncounter{
-    type distance_encounter;
-    type min_distance=1.0;
-    SymplecticEncounter(const type& in) : distance_encounter(in){}
+    std::vector<std::pair<unsigned,unsigned> > pairs_of_encounters;
+    std::vector<type> encounter_distances;
+    unsigned number_encounters;
+    SymplecticEncounter(const std::vector<std::pair<unsigned,unsigned> >& pairs_of_encounters,
+    const std::vector<type> &encounter_distances, unsigned number_encounters)
+    : pairs_of_encounters(pairs_of_encounters),encounter_distances(encounter_distances),
+    number_encounters(number_encounters)
+    {   }
     bool operator()(const Type& X, const type& t){
-        if(norm_2(row(X.first,0) - row(X.first,1)) <= distance_encounter){
-            std::cout << "ENCOUNTER!! in time " << t << std::endl;
-            return 0;
-        }else{
-            //std::cout << "min_distance = " << min_distance << std::endl;
-            //std::cout << "current_distance= " << norm_2(row(X.first,0) - row(X.first,1)) << "   " << t << std::endl;
-            if(min_distance > norm_2(row(X.first,0) - row(X.first,1)))
-                min_distance = norm_2(row(X.first,0) - row(X.first,1));
-            return 1;
+        for(unsigned l = 0; l < number_encounters; ++l){
+            if(norm_2(row(X.first,pairs_of_encounters[l].first)
+            - row(X.first,pairs_of_encounters[l].second)) <= encounter_distances[l]){
+                std::cout << "ENCOUNTER!! between " << pairs_of_encounters[l].first 
+                << " and " << pairs_of_encounters[l].second 
+                << " in time " << t << std::endl;
+                return 0;
+            }
         }
+        return 1;
     } 
 };
 
 template<typename type, typename Integrator, typename sysf, typename observer,typename Type, 
 typename controller=std::function<int(const Type& X, const Type& Y)>, 
 typename exit=std::function<bool(const Type&X, const type &t)> >
-void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+int integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
-    int state;
+    int state, number_steps = 0;
     Type Y;
     type h_begin=h;
     type T=t+h*n;
@@ -729,9 +978,11 @@ void integrate(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observ
         obs_point:
         X0=Y;
         t+=h;
+        ++number_steps;
         Obs(X0,t);
     }
     std::cout << std::endl;
+    return number_steps;
 }
 
 template<typename type>
@@ -757,44 +1008,44 @@ struct Integrate_based_args_t{
     template<typename Integrator, typename sysf, typename observer,typename Type, 
     typename controller=std::function<int(const Type& X, const Type& Y)>, 
     typename exit=std::function<bool(const Type&X, const type &t)> >
-    void integrator_call(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+    int integrator_call(Integrator rk, sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
-        if(args.distance_encounter == 0){
+        if(args.number_encounters == 0){
             if(args.without_controlled_step)
-                integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},
+                return integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},
                 [](const Type& X, const Type& Y){return -1;});
             else
-                integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},Err);
+                return integrate(rk, sysF, X0, t, h, n, Obs,[](const Type& X, const type& t){return 1;},Err);
         }else{
             if(args.without_controlled_step)
-                integrate(rk, sysF, X0, t, h, n, Obs,Bad,[](const Type& X, const Type& Y){return -1;});
+                return integrate(rk, sysF, X0, t, h, n, Obs,Bad,[](const Type& X, const Type& Y){return -1;});
             else
-                integrate(rk, sysF, X0, t, h, n, Obs,Bad, Err);
+                return integrate(rk, sysF, X0, t, h, n, Obs,Bad, Err);
         }
     }
     template<typename sysf, typename observer,typename Type, 
     typename controller=std::function<int(const Type& X, const Type& Y)>, 
     typename exit=std::function<bool(const Type&X, const type &t)>>
-    void integrator_call_standard(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+    int integrator_call_standard(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
 
         if (args.name_integrator == "RK4"){
-            integrator_call(RungeKutta5_Fehlberg<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
+            return integrator_call(RungeKutta5_Fehlberg<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
         }
         if (args.name_integrator == "RK5"){
-            integrator_call(RungeKutta4<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
+            return integrator_call(RungeKutta4<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
         }
     }
     template<typename sysf, typename observer,typename Type, 
     typename controller=std::function<int(const Type& X, const Type& Y)>, 
     typename exit=std::function<bool(const Type&X, const type &t)>>
-    void integrator_call_symplectic(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
+    int integrator_call_symplectic(sysf sysF, Type& X0, type t, type h, int n, observer Obs,
                 exit Bad = [](const Type& X, const type& t){return 1;},
                 controller Err = [](const Type& X, const Type& Y){return -1;}){
         if (args.name_integrator == "LP"){
-            integrator_call(LeapFrog<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
+            return integrator_call(LeapFrog<type, Type>(),sysF,X0,t,h,n,Obs,Bad,Err);
         }
     }
 };
@@ -803,35 +1054,42 @@ struct Integrate_based_args_t{
 int main(int argc, char *const argv[]){
     std::ios_base::sync_with_stdio(false);
     
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     std::vector<state_type> state_result;
     std::vector<data_type> time_result, energy_result;
     std::vector<state_type >norm_R;
     std::vector<std::vector<state_vector> > orbital_elements_result;
     #endif
-    std::ofstream res_file,energy_file,orbital_file;
-    std::ifstream file_in,file_size,file_mass,file_initial;
+    std::ofstream res_file,energy_file,orbital_file,distance_between_pairs;
+    std::ifstream file_in,file_size,file_mass,file_initial,file_encounters;
     std::vector<data_type> m;
-    unsigned current=0;
+    unsigned current = 0;
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    int freeing_memory_current = -1;
+    #endif
+    int number_steps,recording_frequency = 1, focal_body = -1;
     unsigned N,M, bits = 64, dim = 6;
     data_type pi=atan(data_type(1.))*4;
     data_type G=4*pi*pi;
     //G=1.0;
-    data_type T,t0(0.), max_delta=0, delta, distance_encounter = 0, precision_energy = 0;
+    data_type T,t0(0.), max_delta=0, delta, precision_energy = 0,
+    step = 0,energy0,energy;
     state_type X0,Y;
     symplectic_type Z;
     std::string name_integrator = "RK4";
     std::string type_integrator = "standard";
     bool without_controlled_step = 0;
-    unsigned number_orbital_elements;
+    unsigned number_orbital_elements, number_encounters = 0;
     std::pair<unsigned,unsigned> two_bodies;
-    std::vector<std::pair<unsigned,unsigned> > pairs_of_bodies;
+    std::vector<std::pair<unsigned,unsigned> > pairs_of_bodies, pairs_of_encounters;
+    std::vector<data_type> encounter_distances;
+    data_type distance_encounter;
     //runge_kutta4<state_type> rk;
     //controlled_stepper_type controlled_stepper;
     
     
     file_size.open("file_size.dat",std::ios_base::in);
-    file_size >> T >> N >> M >> dim >> bits >> distance_encounter;
+    file_size >> T >> N >> M >> dim >> bits;
     while(file_size >> two_bodies.first >> two_bodies.second){
         pairs_of_bodies.push_back(two_bodies);
     }
@@ -839,10 +1097,28 @@ int main(int argc, char *const argv[]){
 
     number_orbital_elements = pairs_of_bodies.size();
     
-    std::cout << "distance_encounter= " << distance_encounter << std::endl;
+    file_encounters.open("file_encounters.dat",std::ios_base::in);
+    while(file_encounters >> two_bodies.first >> two_bodies.second >> distance_encounter){
+        pairs_of_encounters.push_back(two_bodies);
+        encounter_distances.push_back(distance_encounter);
+    }
+    file_encounters.close();
+
+    number_encounters = encounter_distances.size();
+
+
     Arguments_t<data_type> keys(M,T,N,bits,precision_energy,name_integrator,dim,
-    distance_encounter,without_controlled_step,G,number_orbital_elements);
+    number_encounters,without_controlled_step,G,step,number_orbital_elements,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    freeing_memory_current,
+    #endif
+    recording_frequency,focal_body
+    );
     keys.Parser(argc,argv);
+
+
+    std::cout << "number_orbital_elements= " << number_orbital_elements << std::endl;
+    std::cout << "number_encounters= " << number_encounters << std::endl;
 
     #ifdef ANY_PRESICION
     std::cout.precision(bits);
@@ -852,6 +1128,11 @@ int main(int argc, char *const argv[]){
     mpf_set_default_prec(bits);
     std::cout << "PRESICION: " << mpf_get_default_prec() << std::endl;
     #endif
+
+    #ifdef LONG_DOUBLE_PRESICION
+    std::cout << "LONG DOUBLE PRESICION" << std::endl;
+    #endif
+
 
     #ifdef DOUBLE_PRESICION
     std::cout << "DOUBLE PRESICION" << std::endl;
@@ -865,7 +1146,7 @@ int main(int argc, char *const argv[]){
 
     m.resize(M);
     X0.resize(M,dim);
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     orbital_elements_result.resize(number_orbital_elements);
     #endif
 
@@ -896,47 +1177,69 @@ int main(int argc, char *const argv[]){
     }
 
     NBody nb(
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     state_result, time_result, energy_result,norm_R,orbital_elements_result, 
     #endif
     m,current,dim,precision_energy,G, pairs_of_bodies,number_orbital_elements
-    #ifdef INSTANT_OUTPUT_TO_FILE
-    ,"res.dat","energy.dat","orbital_elements.dat",max_delta
+    ,"res.dat","energy.dat","orbital_elements.dat","distance_between_pairs.dat",max_delta,
+    energy0,energy,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    freeing_memory_current,
     #endif
+    recording_frequency,focal_body
     );
     SymplecticNBody snb(
-    #ifdef ENTRY_TO_ARRAY
+    #ifdef MEMORY_FREEING_BY_CURRENT
     state_result, time_result, energy_result, norm_R, orbital_elements_result,
     #endif
     m,current,dim,precision_energy,G, pairs_of_bodies,number_orbital_elements
-    #ifdef INSTANT_OUTPUT_TO_FILE
-    ,"res.dat","energy.dat","orbital_elements.dat",max_delta
+    ,"res.dat","energy.dat","orbital_elements.dat","distance_between_pairs.dat",max_delta,
+    energy0,energy,
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    freeing_memory_current,
     #endif
+    recording_frequency,focal_body
     );
 
-    #ifdef INSTANT_OUTPUT_TO_FILE
+    //NBody &nb_reference=nb;
+    //SymplecticNBody &snb_reference=snb;
+
     res_file.open("res.dat",std::ios_base::trunc);
     res_file.close();
     energy_file.open("energy.dat",std::ios_base::trunc);
     energy_file.close();
     orbital_file.open("orbital_elements.dat",std::ios_base::trunc);
     orbital_file.close();
-    #endif
+    distance_between_pairs.open("distance_between_pairs.dat",std::ios_base::trunc);
+    distance_between_pairs.close();
 
+    if(step == 0){
+        step = data_type(T/N);
+    }else{
+        #ifdef ANY_PRESICION
+        N=mpf_to_unsigned(T/step + data_type(1.));
+        #else
+        N=ceil(T/step);
+        #endif
+    }
 
     std::cout << type_integrator << std::endl;
     if(type_integrator == "standard"){
-        Integrate_based_args.integrator_call_standard(nb , Y , t0, data_type(T/N), N, nb,
-                Encounter<state_type, data_type>(distance_encounter), nb);
-        std::cout << "steps=" << current << std::endl;
+        number_steps = Integrate_based_args.integrator_call_standard(nb, Y , t0, step, 
+        N, nb, 
+        Encounter<state_type, data_type>(pairs_of_encounters,
+        encounter_distances,number_encounters),nb); 
+        std::cout << "steps=" << number_steps << std::endl;
         std::cout << Y << std::endl;
     }
     if(type_integrator == "symplectic"){
         Z.first=subrange(Y,0,M,0,dim/2);
         Z.second=subrange(Y,0,M,dim/2,dim);
-        Integrate_based_args.integrator_call_symplectic(snb , Z , t0, data_type(T/N), N, snb,
-                SymplecticEncounter<symplectic_type, data_type>(distance_encounter), snb);
-        std::cout << "steps=" << current << std::endl;
+        number_steps = Integrate_based_args.integrator_call_symplectic(snb, Z , t0, step,
+        N, snb,
+        SymplecticEncounter<symplectic_type, data_type>(pairs_of_encounters,
+        encounter_distances,number_encounters),snb);  
+        std::cout << "steps=" << number_steps << std::endl;
         std::cout << Z.first << std::endl;
         std::cout << Z.second << std::endl;
     }
@@ -949,24 +1252,50 @@ int main(int argc, char *const argv[]){
     std::cout << "max_delta= " << max_delta << std::endl;
     #endif
 
-    #ifdef ENTRY_TO_ARRAY
-    res_file.open("res.dat",std::ios_base::trunc);
-    for(unsigned i=0;i<=current;++i){
-        for(unsigned j=0;j<M;++j){
-            for(unsigned k=0;k<dim;++k)
-                res_file << state_result[i](j,k) << " ";
-            res_file << std::endl;
+    #ifdef MEMORY_FREEING_BY_CURRENT
+    res_file.open("res.dat",std::ios_base::app);
+    if(focal_body !=-1){
+        for(unsigned i=0;i<=current;++i){
+            for(unsigned j=0;j<M;++j){
+                for(unsigned k=0;k<dim;++k)
+                    res_file << state_result[i](j,k) - state_result[i](focal_body,k) << " ";
+                res_file << std::endl;
+            }
+            res_file << std::endl << std::endl;
         }
-        res_file << std::endl << std::endl;
+        res_file.close();
+    }else{
+        for(unsigned i=0;i<=current;++i){
+            for(unsigned j=0;j<M;++j){
+                for(unsigned k=0;k<dim;++k)
+                    res_file << state_result[i](j,k) << " ";
+                res_file << std::endl;
+            }
+            res_file << std::endl << std::endl;
+        }
+        res_file.close();
     }
-    res_file.close();
+
+    distance_between_pairs.open("distance_between_pairs.dat",std::ios_base::app);
+    for(unsigned i=0;i<=current;++i){
+        distance_between_pairs << time_result[i] << " ";
+        for(unsigned l = 0; l < number_orbital_elements; ++l)
+            distance_between_pairs << 
+            norm_R[i](pairs_of_bodies[l].first,pairs_of_bodies[l].second) << " ";
+        distance_between_pairs << std::endl;
+        distance_between_pairs << std::endl << std::endl;
+    }
+    distance_between_pairs.close();
+
+    
     if(number_orbital_elements>0){
-        orbital_file.open("orbital_elements.dat",std::ios_base::trunc);
+        orbital_file.open("orbital_elements.dat",std::ios_base::app);
         for(unsigned i=0;i<=current;++i){
             for(unsigned l=0;l<number_orbital_elements;++l){
+                orbital_file << time_result[i] << " ";
                 for(unsigned k=0;k<4;++k)
                     orbital_file << orbital_elements_result[l][i](k) << " ";
-                orbital_file << std::endl;
+                orbital_file << std::endl << std::endl << std::endl;
             }
             orbital_file << std::endl << std::endl;
         }
@@ -983,14 +1312,14 @@ int main(int argc, char *const argv[]){
         res_file.close();
     }
     */
-    energy_file.open("energy.dat",std::ios_base::trunc);
+    energy_file.open("energy.dat",std::ios_base::app);    
     for(unsigned i=0;i<=current;++i){
         energy_file <<  "h(" << i << ")= " << energy_result[i] << std::endl;
         delta=ABS_((energy_result[0]-energy_result[i])/energy_result[i]);
         if(delta > max_delta) max_delta=delta;
     }
     std::cout << "max_delta= " << max_delta << std::endl;
-    #endif
-   
+   #endif
+
    return 0;
 }
